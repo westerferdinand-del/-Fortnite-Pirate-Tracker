@@ -6,7 +6,7 @@ import random
 import time
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QLinearGradient, QPainter, QPen, QRadialGradient
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QLinearGradient, QPainter, QPen, QPolygonF, QRadialGradient
 from PySide6.QtWidgets import QWidget
 
 from . import icons
@@ -40,17 +40,19 @@ class TokenCelebration(QWidget):
         super().__init__(None, OVERLAY_FLAGS)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self._timer = QTimer(self, interval=16, timeout=self._step)
+        # 30 img/s et fenêtre limitée au centre : coût minimal pour le jeu en dessous
+        self._timer = QTimer(self, interval=33, timeout=self._step)
         self._parts: list[_Particle] = []
         self._t0 = 0.0
         self._last = 0.0
         self.subtitle = ""
 
     def play(self, chests_before: int, total_tokens: int) -> None:
-        screen = QGuiApplication.primaryScreen()
-        self.setGeometry(screen.geometry())
+        g = QGuiApplication.primaryScreen().geometry()
+        w, h = min(1100, int(g.width() * 0.7)), min(720, int(g.height() * 0.75))
+        self.setGeometry(g.center().x() - w // 2, g.center().y() - h // 2, w, h)
         self.subtitle = f"Trouvé après {chests_before} coffre{'s' if chests_before > 1 else ''} · Jeton n°{total_tokens}"
-        self._parts = [_Particle(self.width(), self.height()) for _ in range(140)]
+        self._parts = [_Particle(self.width(), self.height()) for _ in range(70)]
         self._t0 = self._last = time.monotonic()
         self.show()
         self.raise_()
@@ -77,24 +79,28 @@ class TokenCelebration(QWidget):
         p.setOpacity(fade)
         w, h = self.width(), self.height()
         # Halo central
-        g = QRadialGradient(QPointF(w / 2, h * 0.42), min(w, h) * 0.55)
+        g = QRadialGradient(QPointF(w / 2, h * 0.42), min(w, h) * 0.5)
         g.setColorAt(0, T.c(T.GOLD, int(110 * min(1, el * 3))))
         g.setColorAt(0.5, T.c(T.VIOLET, 50))
         g.setColorAt(1, T.c(T.VIOLET, 0))
-        p.fillRect(self.rect(), g)
+        p.setPen(Qt.NoPen)
+        p.setBrush(g)
+        p.drawEllipse(QPointF(w / 2, h * 0.42), min(w, h) * 0.5, min(w, h) * 0.5)
         # Rayons tournants
         p.save()
         p.translate(w / 2, h * 0.42)
         p.rotate(el * 20)
         p.setPen(Qt.NoPen)
-        for i in range(16):
-            p.setBrush(T.c(T.GOLD, 28))
-            p.drawPie(QRectF(-w, -w, 2 * w, 2 * w), i * 360 * 16 // 16, 8 * 16)
+        p.setBrush(T.c(T.GOLD, 30))
+        ray = min(w, h) * 0.5
+        for i in range(12):
+            p.drawPolygon(QPolygonF([QPointF(0, 0), QPointF(ray, -ray * 0.12), QPointF(ray, ray * 0.12)]))
+            p.rotate(30)
         p.restore()
         # Jeton géant qui pulse
         k = min(1.0, el * 2.5)
         pulse = 1 + 0.05 * math.sin(el * 6)
-        size = min(w, h) * 0.22 * k * pulse
+        size = min(w, h) * 0.32 * k * pulse
         icons.draw_token(p, QRectF(w / 2 - size / 2, h * 0.42 - size / 2, size, size))
         # Particules
         for pt in self._parts:
@@ -113,22 +119,29 @@ class TokenCelebration(QWidget):
                 p.setBrush(QColor(pt.color))
                 p.drawEllipse(r.center(), pt.size / 6, pt.size / 6)
             p.restore()
-        # Bannière
-        f = T.display_font(int(min(w, h) * 0.05))
-        p.setFont(f)
+        # Bannière (fond sombre pour rester lisible quel que soit le décor du jeu)
         title = "JETON PIRATE TROUVÉ !"
-        tr = QRectF(0, h * 0.62, w, h * 0.1)
-        p.setPen(T.c("#000000", 160))
-        p.drawText(tr.translated(3, 4), Qt.AlignCenter, title)
+        size = max(14, int(min(w, h) * 0.075))
+        f = T.display_font(size)
+        while size > 12 and QFontMetrics(f).horizontalAdvance(title) > w * 0.88:
+            size -= 2
+            f = T.display_font(size)
+        fm = QFontMetrics(f)
+        band = QRectF(w * 0.04, h * 0.66, w * 0.92, fm.height() * 1.25 + 40)
+        p.setPen(QPen(T.c(T.GOLD, 200), 2))
+        p.setBrush(T.c("#0b0718", 225))
+        p.drawRoundedRect(band, 18, 18)
+        p.setFont(f)
+        tr = QRectF(band.x(), band.y() + 6, band.width(), fm.height() * 1.1)
         grad = QLinearGradient(QPointF(w * 0.3, 0), QPointF(w * 0.7, 0))
         grad.setColorAt(0, QColor("#fde68a"))
         grad.setColorAt(0.5, QColor(T.GOLD))
         grad.setColorAt(1, QColor("#fde68a"))
         p.setPen(QPen(grad, 1))
         p.drawText(tr, Qt.AlignCenter, title)
-        p.setFont(T.ui_font(int(min(w, h) * 0.018), QFont.Bold))
+        p.setFont(T.ui_font(max(10, int(size * 0.32)), QFont.Bold))
         p.setPen(QColor(T.TEXT))
-        p.drawText(QRectF(0, h * 0.72, w, h * 0.05), Qt.AlignCenter, self.subtitle)
+        p.drawText(QRectF(band.x(), tr.bottom() - 4, band.width(), 32), Qt.AlignCenter, self.subtitle)
         p.end()
 
 

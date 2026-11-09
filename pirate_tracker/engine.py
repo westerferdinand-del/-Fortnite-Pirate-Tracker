@@ -33,8 +33,10 @@ class DetectionEngine:
     def __init__(self, settings: dict, templates: TemplateStore,
                  on_chest: Callable | None = None, on_token: Callable | None = None,
                  on_status: Callable | None = None, on_metrics: Callable | None = None,
-                 on_fortnite: Callable | None = None):
+                 on_fortnite: Callable | None = None, video_source: str | None = None):
         self.settings = settings
+        # Source vidéo à la place de l'écran (démonstration / validation du pipeline complet)
+        self.video_source = video_source
         self.templates = templates
         self.on_chest = on_chest
         self.on_token = on_token
@@ -88,9 +90,9 @@ class DetectionEngine:
         cap = None
         last_proc_check = 0.0
         pid = None
-        last_token_t = 0.0
-        frames, fps_t0 = 0, time.monotonic()
-        last_metrics = 0.0
+        self._last_token_t = -1e9
+        self._frames, self._fps_t0 = 0, time.monotonic()
+        self._last_metrics = 0.0
         try:
             while not self._stop.is_set():
                 if self._reload.is_set():
@@ -101,6 +103,24 @@ class DetectionEngine:
                         cap = None
                 d = self.settings
                 now = time.monotonic()
+
+                if self.video_source:
+                    if cap is None:
+                        from .capture import VideoCapture
+
+                        cap = VideoCapture(self.video_source)
+                        self.status.backend = "video"
+                        self.status.fortnite_running = True
+                        if self.on_fortnite:
+                            self.on_fortnite(True)
+                    frame = cap.grab()
+                    if frame is None:
+                        self._set_status(INACTIVE, "Fin de la vidéo")
+                        self._sleep(0.5)
+                        continue
+                    self._process(frame, cap.last_t, d, now)
+                    self._sleep(max(0.0, 1.0 / cap.fps - (time.monotonic() - now)))
+                    continue
 
                 if now - last_proc_check > 2.0:
                     last_proc_check = now
@@ -144,39 +164,44 @@ class DetectionEngine:
                 with self._frame_lock:
                     self.last_frame = frame
 
-                t = time.monotonic()
-                ev = self.chest.process(frame, t)
-                mode = self.chest.effective_mode
-                if mode == "prompt+burst":
-                    self._set_status(ACTIVE, "Détection active", chest_mode=mode)
-                else:
-                    msg = ("Détection active (mode éclat seul)" if d.get("chest_mode") == "burst"
-                           else "Calibrage conseillé : capturez l'invite « Fouiller » (mode éclat seul en attendant)")
-                    self._set_status(ACTIVE if d.get("chest_mode") == "burst" else CONFIGURING, msg, chest_mode=mode)
-                if ev and self.on_chest:
-                    self.on_chest(ev)
-
-                if d.get("token_enabled", True) and self.token.has_templates:
-                    if t - last_token_t >= 1.0 / max(0.5, float(d.get("token_fps", 3))):
-                        last_token_t = t
-                        tev = self.token.process(frame, t)
-                        if tev and self.on_token:
-                            self.on_token(tev, frame)
-
-                frames += 1
-                if t - fps_t0 >= 1.0:
-                    self.status.fps = frames / (t - fps_t0)
-                    frames, fps_t0 = 0, t
-                if self.on_metrics and t - last_metrics > 0.1:
-                    last_metrics = t
-                    self.on_metrics({**self.chest.metrics, "token": dict(self.token.metrics), "fps": self.status.fps})
-
+                self._process(frame, time.monotonic(), d, now)
                 target = 1.0 / max(1.0, float(d.get("fps", 15)))
                 self._sleep(max(0.0, target - (time.monotonic() - now)))
         finally:
             if cap:
                 cap.close()
             self._set_status(INACTIVE, "Détection arrêtée")
+
+    def _process(self, frame: np.ndarray, t: float, d: dict, now: float) -> None:
+        with self._frame_lock:
+            self.last_frame = frame
+        ev = self.chest.process(frame, t)
+        mode = self.chest.effective_mode
+        if mode == "prompt+burst":
+            self._set_status(ACTIVE, "Détection active", chest_mode=mode)
+        elif d.get("chest_mode") == "burst":
+            self._set_status(ACTIVE, "Détection active (mode éclat seul)", chest_mode=mode)
+        else:
+            self._set_status(CONFIGURING, "Calibrage conseillé : capturez l'invite « Fouiller » "
+                                          "(mode éclat seul en attendant)", chest_mode=mode)
+        if ev and self.on_chest:
+            self.on_chest(ev)
+
+        if d.get("token_enabled", True) and self.token.has_templates:
+            if t - self._last_token_t >= 1.0 / max(0.5, float(d.get("token_fps", 3))):
+                self._last_token_t = t
+                tev = self.token.process(frame, t)
+                if tev and self.on_token:
+                    self.on_token(tev, frame)
+
+        self._frames += 1
+        if now - self._fps_t0 >= 1.0:
+            self.status.fps = self._frames / (now - self._fps_t0)
+            self._frames, self._fps_t0 = 0, now
+        if self.on_metrics and now - self._last_metrics > 0.1:
+            self._last_metrics = now
+            self.on_metrics({**self.chest.metrics, "token": dict(self.token.metrics), "fps": self.status.fps,
+                             "event": ev is not None})
 
     def _sleep(self, s: float) -> None:
         if s > 0:

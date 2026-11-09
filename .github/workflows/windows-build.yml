@@ -1,0 +1,60 @@
+name: Windows build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-and-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer les dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Tests (sous Windows)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      - name: Vérifier la capture d'écran Windows (dxcam / mss)
+        run: python -c "from pirate_tracker.capture import available_backends, create_capture; print(available_backends()); c = create_capture('mss'); f = c.grab(); print('mss', f.shape); c.close()"
+
+      - name: Construire l'exécutable (PyInstaller)
+        run: pyinstaller packaging/pirate_tracker.spec --noconfirm --distpath dist --workpath build
+
+      - name: Vérifier que l'exe démarre
+        shell: pwsh
+        run: |
+          $env:PIRATE_TRACKER_HOME = "$env:RUNNER_TEMP\pt_smoke"
+          $p = Start-Process -FilePath "dist\PirateTracker\PirateTracker.exe" -PassThru
+          Start-Sleep -Seconds 15
+          if ($p.HasExited) { throw "L'exécutable s'est arrêté (code $($p.ExitCode))" }
+          if (-not (Test-Path "$env:PIRATE_TRACKER_HOME\pirate_tracker.db")) { throw "Base de données non créée" }
+          Stop-Process -Id $p.Id -Force
+          Write-Host "PirateTracker.exe démarre correctement"
+
+      - name: Créer l'installateur (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging\installer.iss
+
+      - name: Archive portable
+        shell: pwsh
+        run: Compress-Archive -Path dist\PirateTracker\* -DestinationPath dist\PirateTracker-portable.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PirateTracker-Windows
+          path: |
+            dist/PirateTracker-Setup-*.exe
+            dist/PirateTracker-portable.zip

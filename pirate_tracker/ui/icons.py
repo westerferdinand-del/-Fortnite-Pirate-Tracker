@@ -41,8 +41,8 @@ def draw_star(p: QPainter, r: QRectF, filled: bool = True, glow: float = 0.0) ->
         p.setBrush(_grad(r, "#fff3b0", T.GOLD_D))
         p.setPen(QPen(QColor("#fde68a"), max(1.0, rad * 0.08)))
     else:
-        p.setBrush(QColor(40, 32, 70))
-        p.setPen(QPen(QColor(90, 78, 140), max(1.0, rad * 0.08)))
+        p.setBrush(QColor(52, 42, 92))
+        p.setPen(QPen(QColor(130, 116, 190), max(1.0, rad * 0.09)))
     p.drawPolygon(poly)
 
 
