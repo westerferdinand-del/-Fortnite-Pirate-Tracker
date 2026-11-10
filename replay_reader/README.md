@@ -2,10 +2,11 @@
 
 Petit programme en C# qui lit un replay Fortnite (`.replay`) et écrit en JSON, sur une ligne :
 
-- `chests` : les coffres **ouverts par le joueur qui a enregistré le replay** (instant, identifiant) ;
+- `chests` : les coffres **ouverts ou cassés par le joueur qui a enregistré le replay** (instant,
+  identifiant, classe, `how` = `ouvert` / `cassé`, `special`, niveau de butin) ;
 - `items` : les objets qu'il a ramassés (nom interne, quantité, instant) ;
 - la partie : date, durée, mode, classement, éliminations, nom du joueur ;
-- des diagnostics : `owner_found`, `chests_seen`, `unknown_chest_classes`, `warnings`.
+- des diagnostics : `owner_found`, `chests_seen`, `special_chest_classes`, `warnings`.
 
 ```bash
 dotnet publish PirateReplayReader -c Release -r win-x64 --self-contained true \
@@ -26,9 +27,19 @@ recherche « annulée » ne fixe `SearchingPawn`). 5 sont attribués au proprié
 détruits juste après l'ouverture, qui ne passent jamais par `bAlreadySearched` ; compter seulement
 `bAlreadySearched` en aurait donc oublié 2.
 
-Limites : les replays très anciens (2020, v11) ne contiennent pas `SearchingPawn` → aucun coffre
-compté, avec un avertissement. Si une future saison introduit une nouvelle classe de coffre, elle
-apparaît dans `unknown_chest_classes` et l'application affiche un avertissement.
+**Coffres cassés** : quand un joueur détruit un coffre, Fortnite fixe aussi `SearchingPawn` sur ce
+joueur, dans la même mise à jour que `bDestroyed` / `bInstantDeath` (vie à 0). Dans le replay de
+test, 2 des 5 coffres du joueur ont été cassés : ils sont comptés et marqués `cassé`. Un coffre
+cassé après avoir été ouvert n'est compté qu'une fois, pour celui qui l'a ouvert.
+
+**Coffres spéciaux** : toute classe dont le nom contient « Chest » (hors meubles `/Props/`, caisses
+de munitions, composants…) est lue automatiquement comme un coffre grâce à un alias générique
+(`NetFieldParser.PathAlias`). Vérifié sur le replay réel : les classes `Tiered_Chest_6_Parent` et
+`Tiered_Chest_Athena_FactionChest_Generic_Parent` sont prises en charge sans être déclarées
+(résultat identique). Les classes non standard rencontrées sont listées dans `special_chest_classes`.
+
+Limite : les replays très anciens (2020, v11) ne contiennent pas `SearchingPawn` → aucun coffre
+compté, avec un avertissement.
 
 ## Bibliothèque intégrée
 
@@ -42,3 +53,6 @@ apparaît dans `unknown_chest_classes` et l'application affiche un avertissement
    `bAlreadySearched` rendu nullable (distinguer « non modifié » de « faux »).
 3. `FortniteReplayReader/Models/NetFieldExports/Items/Chest.cs` : coffres lus en mode `Normal`
    (au lieu de `Debug` uniquement).
+4. `Unreal.Core/NetFieldParser.cs` : `PathAlias`, pour lire une classe inconnue avec la description
+   d'une classe connue.
+5. `Unreal.Core/ReplayReader.cs` : `CurrentExportPath` (classe réelle de l'objet lu).

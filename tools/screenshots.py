@@ -41,7 +41,9 @@ def demo_results():
                         "eliminations": random.randint(0, 9),
                         "playlist": random.choice(["Playlist_DefaultSolo", "Playlist_NoBuildBR_Duo",
                                                    "Playlist_DefaultSquad"]),
-                        "chests": [{"t": 50 + i * 60, "id": i, "kind": "Chest"} for i in range(chests)],
+                        "chests": [{"t": 50 + i * 60, "id": i, "kind": "Tiered_Chest_Athena",
+                                    "how": "cassé" if random.random() < 0.25 else "ouvert",
+                                    "special": random.random() < 0.08} for i in range(chests)],
                         "items": items})
     return out
 

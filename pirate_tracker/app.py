@@ -156,6 +156,10 @@ class AppContext:
         if kind == "match" and p.get("notify"):
             if not p.get("ok"):
                 self.toast("eye", "Replay illisible", (p.get("error") or "")[:60], 4.0)
+            elif p["chests"] == 0 and p.get("warnings"):
+                # Résultat suspect : on le dit clairement plutôt que d'annoncer « aucun coffre »
+                self.toast("eye", "Analyse à vérifier", p["warnings"][0][:70], 6.0)
+                self.tray_message("Pirate Tracker : analyse à vérifier", p["warnings"][0])
             elif n.get("on_match", True):
                 c = p["chests"]
                 title = f"+{c} coffre{'s' if c > 1 else ''} cette partie" if c else "Aucun coffre cette partie"

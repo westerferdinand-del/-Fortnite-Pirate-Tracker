@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS matches (
     ok INTEGER NOT NULL DEFAULT 1,
     error TEXT,
     warnings TEXT,
+    diagnostics TEXT,
     processed_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS chest_events (
@@ -38,7 +39,9 @@ CREATE TABLE IF NOT EXISTS chest_events (
     match_id INTEGER REFERENCES matches(id) ON DELETE CASCADE,
     ts REAL NOT NULL,
     t_in_match REAL,
-    kind TEXT NOT NULL DEFAULT ''
+    kind TEXT NOT NULL DEFAULT '',
+    how TEXT NOT NULL DEFAULT 'ouvert',
+    special INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,9 +73,16 @@ CREATE INDEX IF NOT EXISTS idx_items_match ON items(match_id);
 """
 
 
+# Informations techniques conservées pour comprendre une analyse surprenante (ex. 0 coffre)
+DIAG_KEYS = ("reader_version", "branch", "owner_found", "pawns_seen", "owner_pawns", "chests_seen",
+             "chest_searches_seen", "chests_opened_by_anyone", "aliased_classes", "special_chest_classes")
+
+
 @dataclass
 class Stats:
     total_chests: int = 0
+    total_broken: int = 0
+    total_special: int = 0
     total_tokens: int = 0
     since_last_token: int = 0
     today_chests: int = 0
@@ -93,6 +103,8 @@ class MatchRow:
     started_at: float
     duration: float
     chests: int
+    broken: int
+    special: int
     tokens: int
     placement: int | None
     total_players: int | None
@@ -102,6 +114,7 @@ class MatchRow:
     error: str | None
     warnings: list
     replay_path: str
+    diagnostics: dict
 
 
 def _ts(iso: str | None, fallback: float) -> float:
@@ -128,6 +141,12 @@ class Database:
         self.conn.execute("PRAGMA foreign_keys=ON")
         self._migrate_v1()
         self.conn.executescript(SCHEMA)
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(chest_events)")}
+        for col, ddl in (("how", "TEXT NOT NULL DEFAULT 'ouvert'"), ("special", "INTEGER NOT NULL DEFAULT 0")):
+            if col not in cols:  # bases créées avant l'ajout de « cassé / spécial »
+                self.conn.execute(f"ALTER TABLE chest_events ADD COLUMN {col} {ddl}")
+        if "diagnostics" not in {r[1] for r in self.conn.execute("PRAGMA table_info(matches)")}:
+            self.conn.execute("ALTER TABLE matches ADD COLUMN diagnostics TEXT")
         self.conn.commit()
 
     def _migrate_v1(self) -> None:
@@ -169,16 +188,18 @@ class Database:
             cur = self.conn.execute(
                 """INSERT INTO matches(replay_path, replay_size, replay_mtime, session_id, started_at, duration, chests,
                        placement, total_players, eliminations, playlist, player_name, branch, ok, error, warnings,
-                       processed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       diagnostics, processed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (path, int(size), float(mtime), res.get("session_id"), started, float(res.get("duration_s") or 0),
                  len(chests), res.get("placement"), res.get("total_players"), res.get("eliminations"),
                  res.get("playlist"), res.get("player_name"), res.get("branch"), 1 if res.get("ok") else 0,
-                 res.get("error"), json.dumps(res.get("warnings") or [], ensure_ascii=False), now),
+                 res.get("error"), json.dumps(res.get("warnings") or [], ensure_ascii=False),
+                 json.dumps({k: res.get(k) for k in DIAG_KEYS if k in res}, ensure_ascii=False), now),
             )
             mid = int(cur.lastrowid)
             self.conn.executemany(
-                "INSERT INTO chest_events(match_id, ts, t_in_match, kind) VALUES (?,?,?,?)",
-                [(mid, started + float(c.get("t", 0)), float(c.get("t", 0)), c.get("kind", "")) for c in chests],
+                "INSERT INTO chest_events(match_id, ts, t_in_match, kind, how, special) VALUES (?,?,?,?,?,?)",
+                [(mid, started + float(c.get("t", 0)), float(c.get("t", 0)), c.get("kind", ""),
+                  "cassé" if c.get("how") == "cassé" else "ouvert", 1 if c.get("special") else 0) for c in chests],
             )
             self.conn.executemany(
                 "INSERT INTO items(match_id, ts, item, count) VALUES (?,?,?,?)",
@@ -230,6 +251,8 @@ class Database:
         s = Stats()
         with self._lock:
             s.total_chests = self.total_chests()
+            s.total_broken = self._scalar("SELECT COUNT(*) FROM chest_events WHERE how='cassé'")
+            s.total_special = self._scalar("SELECT COUNT(*) FROM chest_events WHERE special=1")
             s.total_tokens = self._scalar("SELECT COUNT(*) FROM token_events")
             last = self.conn.execute("SELECT total_chests_at FROM token_events ORDER BY ts DESC LIMIT 1").fetchone()
             s.since_last_token = s.total_chests - (last["total_chests_at"] if last else 0)
@@ -259,7 +282,9 @@ class Database:
     def matches(self, limit: int = 1000) -> list[MatchRow]:
         with self._lock:
             rows = self.conn.execute(
-                """SELECT m.*, (SELECT COUNT(*) FROM token_events t WHERE t.match_id=m.id) AS tokens
+                """SELECT m.*, (SELECT COUNT(*) FROM token_events t WHERE t.match_id=m.id) AS tokens,
+                          (SELECT COUNT(*) FROM chest_events c WHERE c.match_id=m.id AND c.how='cassé') AS broken,
+                          (SELECT COUNT(*) FROM chest_events c WHERE c.match_id=m.id AND c.special=1) AS special
                    FROM matches m ORDER BY m.started_at DESC LIMIT ?""",
                 (limit,),
             ).fetchall()
@@ -269,9 +294,10 @@ class Database:
                 warns = json.loads(r["warnings"] or "[]")
             except json.JSONDecodeError:
                 warns = []
-            out.append(MatchRow(r["id"], r["started_at"], r["duration"], r["chests"], r["tokens"], r["placement"],
+            out.append(MatchRow(r["id"], r["started_at"], r["duration"], r["chests"], r["broken"], r["special"],
+                                r["tokens"], r["placement"],
                                 r["total_players"], r["eliminations"], r["playlist"], bool(r["ok"]), r["error"],
-                                warns, r["replay_path"]))
+                                warns, r["replay_path"], json.loads(r["diagnostics"] or "{}")))
         return out
 
     def last_match_id(self) -> int | None:

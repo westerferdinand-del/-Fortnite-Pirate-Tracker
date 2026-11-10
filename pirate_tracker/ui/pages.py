@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen, QRadialGradient
@@ -89,6 +90,7 @@ class HeroCard(QWidget):
         cap = QLabel("COFFRES OUVERTS AU TOTAL")
         cap.setObjectName("muted")
         cap.setFont(T.ui_font(9, QFont.Bold))
+        self.detail = muted("", wrap=False)
         self.big = QLabel("000")
         self.big.setFont(T.display_font(46))
         self.big.setStyleSheet(f"color: {T.GOLD};")
@@ -100,14 +102,19 @@ class HeroCard(QWidget):
         self.next_lbl = muted("")
         col.addWidget(cap)
         col.addWidget(self.big)
+        col.addWidget(self.detail)
         col.addWidget(self.level_lbl)
         col.addWidget(self.stars)
         col.addWidget(self.progress)
         col.addWidget(self.next_lbl)
         lay.addLayout(col, 1)
 
-    def set_values(self, total: int, st: levels.LevelState, animate=True):
+    def set_values(self, total: int, st: levels.LevelState, animate=True, broken: int = 0, special: int = 0):
         self.big.setText(f"{total:03d}")
+        parts = [f"{total - broken} ouverts", f"{broken} cassés"]
+        if special:
+            parts.append(f"dont {special} coffre{'s' if special > 1 else ''} spécia{'ux' if special > 1 else 'l'}")
+        self.detail.setText(" · ".join(parts))
         self.level_lbl.setText(f"NIVEAU {st.level}")
         self.stars.set_stars(st.stars, animate)
         self.progress.set_value(st.star_progress)
@@ -192,7 +199,7 @@ class DashboardPage(QWidget):
         tr = self.ctx.tracker
         s = tr.stats()
         st = tr.level()
-        self.hero.set_values(s.total_chests, st, animate)
+        self.hero.set_values(s.total_chests, st, animate, s.total_broken, s.total_special)
         if s.last_match_chests is None:
             self.cards["last"].set("—", "aucune partie analysée")
         else:
@@ -241,7 +248,8 @@ class HistoryPage(QWidget):
         lay.addWidget(muted("Chaque partie est ajoutée automatiquement quand Fortnite termine d'écrire son replay. "
                             "Sélectionnez une partie pour voir les objets obtenus."))
 
-        self.table = make_table(["Date", "Durée", "Mode", "Classement", "Élim.", "Coffres", "Analyse"], stretch=2)
+        self.table = make_table(["Date", "Durée", "Mode", "Classement", "Élim.", "Coffres", "Ouverts / cassés",
+                                 "Analyse"], stretch=2)
         self.table.itemSelectionChanged.connect(self._show_items)
         lay.addWidget(carded(self.table), 3)
 
@@ -270,15 +278,25 @@ class HistoryPage(QWidget):
             self.table.setItem(i, 3, cell(place, color=T.GOLD if m.placement == 1 else None))
             self.table.setItem(i, 4, cell("—" if m.eliminations is None else m.eliminations))
             self.table.setItem(i, 5, cell(m.chests, color=T.GOLD, bold=True))
+            detail = f"{m.chests - m.broken} / {m.broken}" + (f" · {m.special} spécial" + ("s" if m.special > 1 else "")
+                                                              if m.special else "")
+            self.table.setItem(i, 6, cell(detail))
             if not m.ok:
                 status = cell("Échec", color=T.RED)
                 status.setToolTip(m.error or "")
             elif m.warnings:
-                status = cell("OK (avertissement)", color=T.ORANGE)
+                status = cell("À vérifier" if m.chests == 0 else "OK (avertissement)", color=T.ORANGE)
                 status.setToolTip("\n".join(m.warnings))
             else:
                 status = cell("OK", color=T.GREEN)
-            self.table.setItem(i, 6, status)
+            d = m.diagnostics
+            if d:
+                tip = (f"Fichier : {Path(m.replay_path).name}\nVersion de Fortnite : {d.get('branch')}\n"
+                       f"Joueur identifié : {'oui' if d.get('owner_found') else 'NON'}\n"
+                       f"Coffres vus dans la partie : {d.get('chests_seen')} · ouverts par quelqu'un : "
+                       f"{d.get('chests_opened_by_anyone')}")
+                status.setToolTip(((status.toolTip() + "\n\n") if status.toolTip() else "") + tip)
+            self.table.setItem(i, 7, status)
         self._show_items()
 
     def _selected(self):

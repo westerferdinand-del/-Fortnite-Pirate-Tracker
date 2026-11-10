@@ -243,7 +243,32 @@ public class NetFieldParser
     /// </summary>
     /// <param name="group"></param>
     /// <returns>true if group should be parsed further, false otherwise</returns>
-    public bool WillReadType(string group) => NetFieldGroups.TryGetValue(group, out var _);
+    public bool WillReadType(string group) => NetFieldGroups.TryGetValue(group, out var _) || ResolveAlias(group);
+
+    /// <summary>
+    /// [PirateTracker] Permet de lire une classe inconnue (ex. nouveau coffre d'une saison récente)
+    /// avec la description d'une classe connue : la fonction renvoie le chemin de la classe connue,
+    /// ou null. Les propriétés sont associées par nom.
+    /// </summary>
+    public static Func<string, string?>? PathAlias { get; set; }
+
+    private readonly HashSet<string> _noAlias = new();
+
+    private bool ResolveAlias(string path)
+    {
+        if (PathAlias == null || _noAlias.Contains(path))
+        {
+            return false;
+        }
+        var target = PathAlias(path);
+        if (target != null && target != path && NetFieldGroups.TryGetValue(target, out var info))
+        {
+            NetFieldGroups.Add(path, info);
+            return true;
+        }
+        _noAlias.Add(path);
+        return false;
+    }
 
     /// <summary>
     /// Returns whether or not this <paramref name="group"/> is marked to be parsed.
@@ -284,7 +309,8 @@ public class NetFieldParser
 
         if (exportGroup.GroupId == -1)
         {
-            if (!NetFieldGroups.TryGetIndex(exportGroup.PathName, out var groupIndex))
+            if (!NetFieldGroups.TryGetIndex(exportGroup.PathName, out var groupIndex)
+                && !(ResolveAlias(exportGroup.PathName) && NetFieldGroups.TryGetIndex(exportGroup.PathName, out groupIndex)))
             {
                 exportGroup.GroupId = -2;
                 return false;
@@ -577,7 +603,8 @@ public class NetFieldParser
     /// <returns></returns>
     public INetFieldExportGroup? CreateType(string group)
     {
-        if (!NetFieldGroups.TryGetValue(group, out var exportGroup))
+        if (!NetFieldGroups.TryGetValue(group, out var exportGroup)
+            && !(ResolveAlias(group) && NetFieldGroups.TryGetValue(group, out exportGroup)))
         {
             return null;
         }

@@ -124,6 +124,29 @@ def test_history_rewards_export_backup_restore(tracker, tmp_path):
     assert db.total_chests() == 3
 
 
+def test_broken_and_special_chests_are_counted_and_kept(tracker):
+    r = fake_result("a.replay", chests=4)
+    r["chests"][1]["how"] = "cassé"
+    r["chests"][2]["special"] = True
+    r["chests"][2]["kind"] = "Tiered_Chest_Pirate_Special"
+    tracker.record_match(r)
+    s = tracker.stats()
+    assert (s.total_chests, s.total_broken, s.total_special) == (4, 1, 1)
+    m = tracker.db.matches()[0]
+    assert (m.chests, m.broken, m.special) == (4, 1, 1)
+
+
+def test_suspicious_result_keeps_diagnostics(tracker):
+    got = []
+    tracker.subscribe(lambda k, p: got.append((k, p)))
+    r = fake_result("a.replay", chests=0, owner_found=False, chests_seen=80, chests_opened_by_anyone=60,
+                    warnings=["Aucun personnage reconnu dans ce replay : format de cette saison non pris en charge."])
+    tracker.record_match(r)
+    m = tracker.db.matches()[0]
+    assert m.diagnostics["owner_found"] is False and m.diagnostics["chests_seen"] == 80
+    assert [p for k, p in got if k == "match"][0]["warnings"]
+
+
 def test_delete_match(tracker):
     tracker.record_match(fake_result("a.replay", chests=2))
     tracker.delete_match(tracker.db.matches()[0].id)

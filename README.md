@@ -48,9 +48,10 @@ Un replay Fortnite contient les données réseau de la partie. Pour chaque coffr
 **qui l'a fouillé** (`SearchingPawn`). Pirate Tracker :
 
 1. repère **votre** personnage, c'est-à-dire celui du joueur qui a enregistré le replay ;
-2. compte les coffres fouillés par votre personnage, **une seule fois chacun**. Les coffres
-   ouverts par vos coéquipiers ou par les adversaires ne comptent pas, pas plus que les caisses
-   de munitions ;
+2. compte les coffres **ouverts ou cassés** par votre personnage, **une seule fois chacun**,
+   y compris les **coffres spéciaux** : toute variante de coffre est reconnue automatiquement,
+   même nouvelle. Les coffres de vos coéquipiers ou des adversaires ne comptent pas, pas plus
+   que les caisses de munitions ou les meubles fouillables ;
 3. relève les objets que vous avez ramassés (page Récompenses) et détecte le **jeton pirate**
    d'après le nom de l'objet.
 
@@ -58,6 +59,10 @@ Garde-fous contre les erreurs de comptage :
 - un replay n'est jamais lu pendant la partie, seulement quand Fortnite a fini de l'écrire
   (fichier stable 30 s, et marqué terminé) ;
 - si un replay déjà compté change, la partie est **remplacée**, jamais comptée deux fois ;
+- **partie quittée ou jeu fermé en pleine partie** : le replay coupé est quand même lu, et les
+  coffres ouverts avant la coupure sont comptés (mention « Replay incomplet ») ;
+- un résultat suspect (aucun coffre reconnu, joueur non identifié) est signalé « À vérifier » au
+  lieu d'annoncer « 0 coffre » ;
 - un replay illisible est signalé et ne compte rien.
 
 Pendant que vous jouez, l'application ne fait rien d'autre qu'attendre, donc elle ne consomme rien.

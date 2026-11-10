@@ -1,4 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using Unreal.Core.Contracts;
 using Unreal.Core.Exceptions;
@@ -54,6 +54,8 @@ public abstract class ReplayReader<T> where T : Replay, new()
     protected T Replay { get; set; }
     /// <summary>[PirateTracker] Horodatage (s) de la trame de démo en cours de lecture.</summary>
     protected float CurrentTime { get; set; }
+    /// <summary>[PirateTracker] Chemin de la classe de l'export en cours (OnExportRead).</summary>
+    protected string? CurrentExportPath { get; set; }
     protected ParseMode _parseMode;
     protected bool IsDebugMode => _parseMode == ParseMode.Debug;
 
@@ -1797,6 +1799,7 @@ public abstract class ReplayReader<T> where T : Replay, new()
 
         if (!netDeltaUpdate && hasdata)
         {
+            CurrentExportPath = group.PathName; // [PirateTracker] classe réelle de l'objet exporté
             OnExportRead(channelIndex, exportGroup);
         }
 

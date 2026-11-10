@@ -58,7 +58,13 @@ public class ChestOpen
 {
     public float T { get; set; }
     public uint Id { get; set; }
+    /// <summary>Nom court de la classe du coffre (ex. Tiered_Chest_Athena).</summary>
     public string Kind { get; set; } = "";
+    /// <summary>« ouvert » (fouillé) ou « cassé » (détruit par le joueur).</summary>
+    public string How { get; set; } = "ouvert";
+    /// <summary>Coffre spécial : toute classe autre que le coffre standard.</summary>
+    public bool Special { get; set; }
+    public int? LootTier { get; set; }
 }
 
 public class ItemPickup
@@ -86,53 +92,110 @@ public class MatchResult
     public uint? TotalPlayers { get; set; }
     public uint? Eliminations { get; set; }
     public bool OwnerFound { get; set; }
+    public bool Partial { get; set; }
+    public int RelevancyPawns { get; set; }
     public List<ChestOpen> Chests { get; set; } = new();
     public List<ItemPickup> Items { get; set; } = new();
     public int ChestsSeen { get; set; }
+    public int PawnsSeen { get; set; }
+    public int OwnerPawns { get; set; }
+    public int ChestSearchesSeen { get; set; }
+    public List<string> AliasedClasses { get; set; } = new();
     public int ChestsOpenedByAnyone { get; set; }
-    /// <summary>Classes de conteneurs « coffre » présentes dans le replay mais non lues (nouvelles saisons).</summary>
-    public List<string> UnknownChestClasses { get; set; } = new();
+    /// <summary>Classes de coffres non standard rencontrées (coffres spéciaux, nouvelles saisons).</summary>
+    public List<string> SpecialChestClasses { get; set; } = new();
     public List<string> Warnings { get; set; } = new();
 }
 
-// Autres classes de coffres vues dans des replays récents (Chapitre 5) : lues comme des coffres.
 public abstract class ExtraChest : BaseContainer { }
 
-[NetFieldExportGroup("/Game/Building/ActorBlueprints/Containers/Tiered_Chest_6_Parent.Tiered_Chest_6_Parent_C", minimalParseMode: ParseMode.Normal)]
-public class ChestParent6 : ExtraChest { }
-
-[NetFieldExportGroup("/Game/Building/ActorBlueprints/Containers/Tiered_Chest_Athena_FactionChest_Generic_Parent.Tiered_Chest_Athena_FactionChest_Generic_Parent_C", minimalParseMode: ParseMode.Normal)]
-public class FactionChestParent : ExtraChest { }
+// Classe générique : toute classe de coffre inconnue est lue avec la description d'un coffre
+// (propriétés associées par nom : SearchingPawn, bAlreadySearched, bDestroyed…).
+[NetFieldExportGroup(ChestReplayReader.GenericChestPath, minimalParseMode: ParseMode.Normal)]
+public class GenericChest : ExtraChest { }
 
 public class ChestReplayReader : FortniteReplayReader.ReplayReader
 {
-    public static readonly HashSet<string> KnownChestPaths = new()
+    public const string StandardChestPath = "/Game/Building/ActorBlueprints/Containers/Tiered_Chest_Athena.Tiered_Chest_Athena_C";
+    public const string GenericChestPath = "/PirateTracker/GenericChest.GenericChest_C";
+    public const string PlayerPawnPath = "/Game/Athena/PlayerPawn_Athena.PlayerPawn_Athena_C";
+    private static readonly string[] NotChestWords = { "Ammo", "Spawner", "Manager", "Component", "GC_", "Cue", "Chestplate" };
+    private static readonly HashSet<string> AliasedPaths = new();
+
+    /// <summary>Une classe inconnue est-elle un coffre ? (nom contenant « Chest », hors meubles et caisses de munitions)</summary>
+    public static string? ChestAlias(string path)
     {
-        "/Game/Building/ActorBlueprints/Containers/Tiered_Chest_Athena.Tiered_Chest_Athena_C",
-        "/Game/Building/ActorBlueprints/Containers/Creative_Tiered_Chest.Creative_Tiered_Chest_C",
-        "/Game/Building/ActorBlueprints/Containers/Tiered_Chest_Athena_FactionChest_NoLocks.Tiered_Chest_Athena_FactionChest_NoLocks_C",
-        "/Game/Building/ActorBlueprints/Containers/Tiered_Chest_6_Parent.Tiered_Chest_6_Parent_C",
-        "/Game/Building/ActorBlueprints/Containers/Tiered_Chest_Athena_FactionChest_Generic_Parent.Tiered_Chest_Athena_FactionChest_Generic_Parent_C",
-    };
+        var name = path[(path.LastIndexOf('/') + 1)..];
+        // Personnage d'une nouvelle saison (classe renommée) : lu comme PlayerPawn_Athena
+        if (name.Contains("PlayerPawn", StringComparison.OrdinalIgnoreCase)
+            && !name.Contains("Cache", StringComparison.OrdinalIgnoreCase)
+            && !name.Contains("Component", StringComparison.OrdinalIgnoreCase))
+        {
+            lock (AliasedPaths)
+            {
+                AliasedPaths.Add(path);
+            }
+            return PlayerPawnPath;
+        }
+        if (!name.Contains("Chest", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("/Props/", StringComparison.OrdinalIgnoreCase)
+            || NotChestWords.Any(w => name.Contains(w, StringComparison.OrdinalIgnoreCase)))
+        {
+            return null;
+        }
+        lock (AliasedPaths)
+        {
+            AliasedPaths.Add(path);
+        }
+        return GenericChestPath;
+    }
 
     private readonly Dictionary<uint, uint> _channelActor = new();
-    private readonly Dictionary<uint, uint> _pawnToPlayerState = new();
-    private readonly List<(float t, uint chest, string kind, uint pawn)> _opens = new();
+    internal readonly Dictionary<uint, uint> _pawnToPlayerState = new();
+    internal readonly List<(float t, uint chest, string path, uint pawn, bool broken)> _opens = new();
+    private uint? _recorderId;
+    private readonly HashSet<uint> _relevancyPawns = new();
+    private readonly Dictionary<uint, int> _lootTier = new();
+    private readonly HashSet<string> _chestClassesSeen = new();
     private readonly HashSet<uint> _chestsSeen = new();
     private readonly HashSet<uint> _chestsOpened = new();
     private readonly Dictionary<uint, string> _pickupItem = new();
     private readonly Dictionary<uint, int> _pickupCount = new();
     private readonly List<(float t, uint pickup, uint pawn)> _pickedUp = new();
-    private readonly HashSet<string> _groupPaths = new();
-    private int _lastGroupCount;
 
     private ChestReplayReader() : base(null, ParseMode.Normal) { }
 
     public static MatchResult Analyze(string path)
     {
+        Unreal.Core.NetFieldParser.PathAlias = ChestAlias;
+        lock (AliasedPaths)
+        {
+            AliasedPaths.Clear();
+        }
         var reader = new ChestReplayReader();
-        var replay = reader.ReadReplay(path);
-        return reader.BuildResult(path, replay);
+        FortniteReplayReader.Models.FortniteReplay? replay = null;
+        Exception? error = null;
+        try
+        {
+            replay = reader.ReadReplay(path);
+        }
+        catch (Exception ex) when (ex is not FileNotFoundException and not DirectoryNotFoundException
+                                       and not UnauthorizedAccessException)
+        {
+            // Replay coupé (partie quittée brutalement, jeu fermé, plantage) : on garde ce qui a été lu.
+            error = ex;
+        }
+        if (replay == null && reader._opens.Count == 0 && reader._pawnToPlayerState.Count == 0)
+        {
+            throw error ?? new InvalidDataException("Replay vide");
+        }
+        var result = reader.BuildResult(path, replay);
+        if (error != null)
+        {
+            result.Partial = true;
+            result.Warnings.Add($"Replay incomplet (partie quittée ou jeu fermé) : coffres comptés jusqu'à {reader.CurrentTime / 60:F0} min.");
+        }
+        return result;
     }
 
     protected override void OnChannelOpened(uint channelIndex, NetworkGUID? actor)
@@ -141,17 +204,6 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
         if (actor != null)
         {
             _channelActor[channelIndex] = actor.Value;
-        }
-        SnapshotGroups();
-    }
-
-    private void SnapshotGroups()
-    {
-        var map = _netGuidCache?.NetFieldExportGroupMap;
-        if (map != null && map.Count != _lastGroupCount)
-        {
-            _lastGroupCount = map.Count;
-            _groupPaths.UnionWith(map.Keys);
         }
     }
 
@@ -165,6 +217,18 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
 
         switch (exportGroup)
         {
+            case FortniteReplayReader.Models.NetFieldExports.GameState gs:
+                if (gs.RecorderPlayerState?.Value is uint rec && rec != 0)
+                {
+                    _recorderId = rec;
+                }
+                // Personnage suivi par le replay = celui du joueur qui l'enregistre
+                if (gs.PawnForReplayRelevancy is uint rel && rel != 0)
+                {
+                    _relevancyPawns.Add(rel);
+                }
+                break;
+
             case PlayerPawn pawn when pawn.PlayerState.HasValue:
                 _pawnToPlayerState[actor] = pawn.PlayerState.Value;
                 break;
@@ -172,12 +236,19 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
             // Coffres uniquement (les caisses de munitions et autres conteneurs sont ignorés)
             case BaseContainer chest when chest is Chest or FactionChest or ExtraChest:
                 _chestsSeen.Add(actor);
-                // SearchingPawn n'est répliqué qu'au moment de l'ouverture (vérifié sur replay réel :
-                // chaque coffre avec SearchingPawn a aussi SearchAnimationCount > 0).
+                var classPath = CurrentExportPath ?? chest.GetType().Name;
+                _chestClassesSeen.Add(classPath);
+                if (chest.ReplicatedLootTier > 0)
+                {
+                    _lootTier[actor] = chest.ReplicatedLootTier;
+                }
+                // SearchingPawn n'est répliqué qu'au moment où le coffre libère son butin, qu'il soit
+                // ouvert ou cassé (vérifié sur replay réel : un coffre cassé a SearchingPawn = celui qui
+                // l'a détruit, avec bDestroyed/bInstantDeath dans la même mise à jour).
                 if (chest.SearchingPawn is uint pawnId && pawnId != 0)
                 {
                     _chestsOpened.Add(actor);
-                    _opens.Add((CurrentTime, actor, chest.GetType().Name, pawnId));
+                    _opens.Add((CurrentTime, actor, classPath, pawnId, chest.bDestroyed || chest.bInstantDeath));
                 }
                 else if (chest.bAlreadySearched == true || chest.SearchAnimationCount > 0)
                 {
@@ -202,35 +273,52 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
         }
     }
 
-    private MatchResult BuildResult(string path, FortniteReplayReader.Models.FortniteReplay replay)
+    private MatchResult BuildResult(string path, FortniteReplayReader.Models.FortniteReplay? replay)
     {
-        SnapshotGroups();
         var result = new MatchResult
         {
             File = path,
-            Branch = replay.Header?.Branch,
-            FriendlyName = replay.Info?.FriendlyName,
-            StartedUtc = replay.GameData?.UtcTimeStartedMatch ?? replay.Info?.Timestamp,
-            DurationS = (replay.Info?.LengthInMs ?? 0) / 1000.0,
-            IsLive = replay.Info?.IsLive ?? false,
-            Playlist = replay.GameData?.CurrentPlaylist,
-            SessionId = replay.GameData?.GameSessionId,
-            Placement = replay.TeamStats?.Position is > 0 ? replay.TeamStats.Position : null,
-            TotalPlayers = replay.TeamStats?.TotalPlayers is > 0 ? replay.TeamStats.TotalPlayers : null,
-            Eliminations = replay.Stats?.Eliminations,
+            Branch = replay?.Header?.Branch ?? Replay?.Header?.Branch,
+            FriendlyName = replay?.Info?.FriendlyName ?? Replay?.Info?.FriendlyName,
+            StartedUtc = replay?.GameData?.UtcTimeStartedMatch ?? replay?.Info?.Timestamp ?? Replay?.Info?.Timestamp,
+            DurationS = replay?.Info?.LengthInMs is uint ms && ms > 0 ? ms / 1000.0 : CurrentTime,
+            IsLive = replay?.Info?.IsLive ?? Replay?.Info?.IsLive ?? false,
+            Playlist = replay?.GameData?.CurrentPlaylist,
+            SessionId = replay?.GameData?.GameSessionId,
+            Placement = replay?.TeamStats?.Position is > 0 ? replay.TeamStats.Position : null,
+            TotalPlayers = replay?.TeamStats?.TotalPlayers is > 0 ? replay.TeamStats.TotalPlayers : null,
+            Eliminations = replay?.Stats?.Eliminations,
             ChestsSeen = _chestsSeen.Count,
             ChestsOpenedByAnyone = _chestsOpened.Count,
         };
 
-        var owner = replay.PlayerData?.FirstOrDefault(p => p.IsReplayOwner);
+        var owner = replay?.PlayerData?.FirstOrDefault(p => p.IsReplayOwner);
         result.PlayerName = owner?.PlayerName;
 
-        var recorder = replay.GameData?.RecorderId;
+        var recorder = replay?.GameData?.RecorderId ?? _recorderId;
         var ownerPawns = recorder.HasValue
             ? _pawnToPlayerState.Where(kv => kv.Value == recorder.Value).Select(kv => kv.Key).ToHashSet()
             : new HashSet<uint>();
+        // Secours : personnage suivi par le replay (PawnForReplayRelevancy), indépendant des classes de personnage
+        ownerPawns.UnionWith(_relevancyPawns);
+        result.RelevancyPawns = _relevancyPawns.Count;
         result.OwnerFound = ownerPawns.Count > 0;
-        if (!recorder.HasValue)
+        result.PawnsSeen = _pawnToPlayerState.Count;
+        result.OwnerPawns = ownerPawns.Count;
+        result.ChestSearchesSeen = _opens.Select(o => o.chest).Distinct().Count();
+        lock (AliasedPaths)
+        {
+            result.AliasedClasses = AliasedPaths.OrderBy(x => x).ToList();
+        }
+        if (_chestsSeen.Count == 0 && result.DurationS > 120)
+        {
+            result.Warnings.Add("Aucun coffre reconnu dans ce replay : les coffres de cette saison ne sont pas encore pris en charge.");
+        }
+        if (_pawnToPlayerState.Count == 0 && result.DurationS > 60)
+        {
+            result.Warnings.Add("Aucun personnage reconnu dans ce replay : format de cette saison non pris en charge.");
+        }
+        if (!recorder.HasValue && ownerPawns.Count == 0)
         {
             result.Warnings.Add("Joueur propriétaire du replay introuvable (RecorderPlayerState absent).");
         }
@@ -245,8 +333,28 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
         {
             if (ownerPawns.Contains(o.pawn) && seen.Add(o.chest))
             {
-                result.Chests.Add(new ChestOpen { T = MathF.Round(o.t, 1), Id = o.chest, Kind = o.kind });
+                var shortName = o.path[(o.path.LastIndexOf('/') + 1)..];
+                if (shortName.Contains('.'))
+                {
+                    shortName = shortName[..shortName.IndexOf('.')];
+                }
+                result.Chests.Add(new ChestOpen
+                {
+                    T = MathF.Round(o.t, 1),
+                    Id = o.chest,
+                    Kind = shortName,
+                    How = o.broken ? "cassé" : "ouvert",
+                    Special = o.path != StandardChestPath,
+                    LootTier = _lootTier.TryGetValue(o.chest, out var tier) ? tier : null,
+                });
             }
+        }
+
+        if (result.Chests.Count == 0 && result.ChestSearchesSeen > 0 && _pickedUp.All(p => !ownerPawns.Contains(p.pawn))
+            && result.DurationS > 180)
+        {
+            result.Warnings.Add("Des coffres ont été ouverts dans la partie mais aucun coffre ni objet n'est attribué au joueur : "
+                                + "son personnage n'a probablement pas été identifié.");
         }
 
         var seenPickups = new HashSet<uint>();
@@ -263,15 +371,10 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
             }
         }
 
-        result.UnknownChestClasses = _groupPaths
-            .Where(p => p.Contains("/Containers/Tiered_Chest", StringComparison.OrdinalIgnoreCase)
-                        && !KnownChestPaths.Contains(p))
+        result.SpecialChestClasses = _chestClassesSeen
+            .Where(p => p != StandardChestPath)
             .OrderBy(p => p)
             .ToList();
-        if (result.UnknownChestClasses.Count > 0)
-        {
-            result.Warnings.Add("Nouveaux types de coffres non pris en charge : " + string.Join(", ", result.UnknownChestClasses));
-        }
         if (_chestsOpened.Count > 0 && _opens.Count == 0)
         {
             result.Warnings.Add("Ce replay n'indique pas qui ouvre les coffres (version de Fortnite trop ancienne) : coffres non comptés.");

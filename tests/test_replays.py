@@ -27,8 +27,8 @@ needs_reader = pytest.mark.skipif(not (SAMPLE.exists() and reader_available()),
 def test_real_replay_owner_chests():
     """Vrai replay du Chapitre 5 : coffres ouverts par le joueur qui a enregistré le replay.
 
-    Valeur de référence établie en inspectant le replay : 5 ouvertures dont SearchingPawn est le
-    personnage du propriétaire (dont 2 coffres détruits après ouverture, sans bAlreadySearched).
+    Valeur de référence établie en inspectant le replay : 5 coffres dont SearchingPawn est le
+    personnage du propriétaire : 3 ouverts (bAlreadySearched) et 2 cassés (vie à 0, bDestroyed).
     """
     res = replays.read_replay(SAMPLE)
     assert res["ok"], res.get("error")
@@ -38,9 +38,34 @@ def test_real_replay_owner_chests():
     assert res["chests_opened_by_anyone"] > len(res["chests"])  # les coffres des autres ne sont pas comptés
     assert res["placement"] == 2 and res["eliminations"] == 8
     assert res["started_utc"].startswith("2024-11-03")
-    assert not res["is_live"] and res["unknown_chest_classes"] == []
+    assert [c["how"] for c in res["chests"]] == ["cassé", "ouvert", "cassé", "ouvert", "ouvert"]
+    assert not any(c["special"] for c in res["chests"])
+    assert not res["is_live"]
+    # Classes de coffres non standard présentes dans la partie, lues automatiquement (alias générique)
+    assert any("Tiered_Chest_6_Parent" in p for p in res["special_chest_classes"])
+    assert any("FactionChest_Generic_Parent" in p for p in res["special_chest_classes"])
+    assert res["chests_seen"] == 95
     picked = {i["item"] for i in res["items"]}
     assert "WID_Assault_CoreAR_Athena_UC" in picked and "Athena_WadsItemData" in picked
+
+
+@needs_reader
+def test_cut_replay_keeps_chests_read_before_the_cut(tmp_path):
+    """Partie quittée brutalement / jeu fermé : le replay est coupé, les coffres déjà lus sont gardés."""
+    data = SAMPLE.read_bytes()
+    cut = tmp_path / "coupe.replay"
+    cut.write_bytes(data[: int(len(data) * 0.7)])  # avant correction : erreur → 0 coffre
+    res = replays.read_replay(cut)
+    assert res["ok"] and res["partial"]
+    assert len(res["chests"]) == 5
+    assert any("incomplet" in w for w in res["warnings"])
+
+
+@needs_reader
+def test_diagnostics_are_reported():
+    res = replays.read_replay(SAMPLE)
+    assert (res["pawns_seen"], res["owner_pawns"], res["chest_searches_seen"]) == (143, 2, 58)
+    assert res["warnings"] == []
 
 
 @needs_reader
