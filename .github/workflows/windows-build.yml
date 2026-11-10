@@ -13,6 +13,8 @@ env:
 jobs:
   test-and-build:
     runs-on: windows-latest
+    permissions:
+      contents: write  # publication de l'installateur dans la release « latest »
     steps:
       - uses: actions/checkout@v4
 
@@ -96,6 +98,21 @@ jobs:
       - name: Archive portable
         shell: pwsh
         run: Compress-Archive -Path dist\PirateTracker\* -DestinationPath dist\PirateTracker-portable.zip
+
+      # Adresse de téléchargement fixe, sans compte GitHub :
+      # https://github.com/<dépôt>/releases/download/latest/PirateTracker-Setup.exe
+      - name: Publier l'installateur (release « latest »)
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Copy-Item (Get-ChildItem dist/PirateTracker-Setup-*.exe | Select-Object -First 1).FullName dist/PirateTracker-Setup.exe
+          gh release view latest *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create latest --title "Pirate Tracker (dernière version)" --notes "Installateur Windows de la dernière version. Téléchargement direct : PirateTracker-Setup.exe" --target $env:GITHUB_SHA
+          }
+          gh release upload latest dist/PirateTracker-Setup.exe dist/PirateTracker-portable.zip --clobber
 
       - uses: actions/upload-artifact@v4
         with:
