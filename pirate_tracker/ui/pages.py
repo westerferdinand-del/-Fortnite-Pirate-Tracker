@@ -409,6 +409,7 @@ class MatchesPage(QWidget):
                  f"Coffres comptés : {m.chests} (ouverts {m.chests - m.broken}, cassés {m.broken})",
                  f"Coffres par classe : {d.get('chest_classes_opened') or '{}'}",
                  f"Autres conteneurs fouillés (non comptés) : {d.get('other_containers_searched') or '{}'}",
+                 f"Coffres détruits sans auteur connu (non comptés) : {d.get('chests_destroyed_unattributed', '?')}",
                  f"Joueur identifié : {d.get('owner_found')} · personnages : {d.get('owner_pawns')} / {d.get('pawns_seen')}"
                  f" · suivi replay : {d.get('relevancy_pawns')}",
                  f"Coffres vus dans la partie : {d.get('chests_seen')} · ouverts par quelqu'un : "

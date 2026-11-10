@@ -103,6 +103,8 @@ public class MatchResult
     public List<ChestOpen> Chests { get; set; } = new();
     public List<ItemPickup> Items { get; set; } = new();
     public int ChestsSeen { get; set; }
+    /// <summary>Coffres détruits sans aucune ouverture connue (ni ouvreur, ni compteur) : peut-être cassés sans être attribués.</summary>
+    public int ChestsDestroyedUnattributed { get; set; }
     /// <summary>Conteneurs NON comptés comme coffres que le joueur a fouillés (classe → nombre).</summary>
     public Dictionary<string, int> OtherContainersSearched { get; set; } = new();
     /// <summary>Coffres comptés, par classe exacte (classe → nombre).</summary>
@@ -312,6 +314,7 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
     private readonly HashSet<uint> _countedViaPawnOnly = new();
     private readonly Dictionary<uint, float> _animWithoutPawnAt = new();
     private readonly HashSet<uint> _hasOpening = new();
+    private readonly HashSet<uint> _chestsDestroyed = new();
 
     /// <summary>
     /// Détecte chaque ouverture d'un coffre, y compris les réouvertures (les coffres se remplissent
@@ -334,6 +337,10 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
         if (anim > 0 || pawn.HasValue || chest.bAlreadySearched == true)
         {
             _chestsOpened.Add(actor);
+        }
+        if (broken)
+        {
+            _chestsDestroyed.Add(actor);
         }
 
         var opens = 0;
@@ -522,6 +529,7 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
         result.OtherContainersSearched = _otherSearches.Where(o => ownerPawns.Contains(o.pawn))
             .GroupBy(o => Short(o.path)).OrderByDescending(g => g.Count()).ToDictionary(g => g.Key, g => g.Count());
         result.ChestClassesOpened = result.Chests.GroupBy(c => c.Kind).ToDictionary(g => g.Key, g => g.Count());
+        result.ChestsDestroyedUnattributed = _chestsDestroyed.Count(c => !_hasOpening.Contains(c) && !_chestAnim.ContainsKey(c));
 
         var seenPickups = new HashSet<uint>();
         foreach (var p in _pickedUp.OrderBy(p => p.t))
