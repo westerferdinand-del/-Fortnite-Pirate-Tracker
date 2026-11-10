@@ -295,8 +295,8 @@ class LineChart(_Chart):
 
 
 class StatusPill(QWidget):
-    COLORS = {"active": (T.GREEN, "Détection active"), "configuring": (T.ORANGE, "Configuration en cours"),
-              "inactive": (T.RED, "Détection inactive")}
+    COLORS = {"active": (T.GREEN, "Analyse des replays active"), "configuring": (T.ORANGE, "Configuration requise"),
+              "inactive": (T.RED, "Analyse inactive")}
 
     def __init__(self, parent=None):
         super().__init__(parent)

@@ -5,7 +5,7 @@ import math
 import time
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QLinearGradient, QPainter, QPen
 from PySide6.QtWidgets import QMenu, QWidget
 
 from . import icons
@@ -28,7 +28,7 @@ class OverlayWidget(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setWindowTitle("Pirate Tracker — widget")
-        self.values = {"chests": 0, "tokens": 0, "level": 1, "stars": 0, "since": 0, "progress": 0.0}
+        self.values = {"chests": 0, "last": None, "tokens": 0, "level": 1, "stars": 0, "since": 0, "progress": 0.0}
         self.status = "inactive"
         self._drag: QPoint | None = None
         self._anim = {}  # nom -> heure de début
@@ -47,7 +47,10 @@ class OverlayWidget(QWidget):
         return SIZES.get(self.ocfg.get("size", "medium"), 1.0)
 
     def _rows(self) -> list[str]:
-        rows = ["chests", "tokens"]
+        rows = ["chests"]
+        if self.ocfg.get("show_last_match", True):
+            rows.append("last")
+        rows.append("tokens")
         if self.ocfg.get("show_level", True):
             rows.append("level")
         if self.ocfg.get("show_since_token", True):
@@ -84,9 +87,11 @@ class OverlayWidget(QWidget):
         self.move(int(x), int(y))
 
     # ------------------------------------------------------------------ data
-    def set_values(self, chests: int, tokens: int, level: int, stars: int, since: int, progress: float) -> None:
+    def set_values(self, chests: int, last: int | None, tokens: int, level: int, stars: int, since: int,
+                   progress: float) -> None:
+        """Mis à jour à la fin de chaque partie (après analyse du replay)."""
         prev = dict(self.values)
-        self.values = {"chests": chests, "tokens": tokens, "level": level, "stars": stars,
+        self.values = {"chests": chests, "last": last, "tokens": tokens, "level": level, "stars": stars,
                        "since": since, "progress": progress}
         if chests > prev["chests"]:
             self.animate("chest")
@@ -166,6 +171,7 @@ class OverlayWidget(QWidget):
         v = self.values
         labels = {
             "chests": ("chest", "COFFRES OUVERTS", f"{v['chests']:03d}"),
+            "last": ("chest_open", "DERNIÈRE PARTIE", "—" if v["last"] is None else f"+{v['last']}"),
             "tokens": ("token", "JETONS TROUVÉS", f"{v['tokens']}"),
             "level": ("star", "NIVEAU", f"{v['level']}"),
             "since": ("flame", "DEPUIS LE DERNIER JETON", f"{v['since']:03d}"),
@@ -195,7 +201,10 @@ class OverlayWidget(QWidget):
                 pop = abs(math.sin(math.pi * 3 * ph)) if ph is not None else 0
             fv = T.display_font(int((14 + 4 * pop) * s))
             p.setFont(fv)
-            p.setPen(QColor("#fff3b0") if pop > 0 else QColor(T.GOLD if key != "since" else T.TEXT))
+            if key == "last":
+                ph = self._phase("chest", 0.9)
+                pop = math.sin(math.pi * ph) if ph is not None else 0
+            p.setPen(QColor("#fff3b0") if pop > 0 else QColor(T.GOLD if key not in ("since", "last") else T.TEXT))
             p.drawText(row, Qt.AlignVCenter | Qt.AlignRight, val)
             y += self.ROW_H * s
 

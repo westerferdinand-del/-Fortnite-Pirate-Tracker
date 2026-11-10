@@ -1,16 +1,15 @@
 """Fenêtre principale : barre latérale + pages."""
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QSize
 from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget,
                                QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
 from . import icons
 from . import theme as T
-from .detection_page import DetectionPage
-from .pages import DashboardPage, HistoryPage, ProgressPage
+from .pages import DashboardPage, HistoryPage, ProgressPage, RewardsPage
+from .replays_page import ReplaysPage
 from .settings_page import SettingsPage
 from .widgets import muted
 
@@ -59,12 +58,14 @@ class MainWindow(QMainWindow):
         self.pages = {
             "dashboard": DashboardPage(ctx),
             "history": HistoryPage(ctx),
+            "rewards": RewardsPage(ctx),
             "progress": ProgressPage(ctx),
-            "detection": DetectionPage(ctx),
+            "replays": ReplaysPage(ctx),
             "settings": SettingsPage(ctx),
         }
         nav = [("dashboard", "chest", "Tableau de bord"), ("history", "list", "Historique"),
-               ("progress", "star", "Étoiles && niveaux"), ("detection", "eye", "Détection"),
+               ("rewards", "trophy", "Récompenses"), ("progress", "star", "Étoiles && niveaux"),
+               ("replays", "eye", "Replays"),
                ("settings", "gear", "Paramètres")]
         self.group = QButtonGroup(self)
         self.group.setExclusive(True)
@@ -85,7 +86,7 @@ class MainWindow(QMainWindow):
         self.widget_btn = QPushButton("Masquer le widget")
         self.widget_btn.clicked.connect(ctx.toggle_overlay)
         sv.addWidget(self.widget_btn)
-        foot = muted(f"v{__version__} · capture d'écran uniquement,\naucune modification du jeu", wrap=True)
+        foot = muted(f"v{__version__} · lecture des replays uniquement,\naucune modification du jeu", wrap=True)
         foot.setFont(T.ui_font(7))
         sv.addWidget(foot)
 

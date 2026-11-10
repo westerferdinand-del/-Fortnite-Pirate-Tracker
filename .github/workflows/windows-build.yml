@@ -5,6 +5,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  # Replay réel (Fortnite v32.00) fourni par FortniteReplayDecompressor (MIT), commit figé
+  SAMPLE_REPLAY_URL: https://raw.githubusercontent.com/Shiqan/FortniteReplayDecompressor/76f74c1f640069afdba71b6468e2f819327893c2/src/ConsoleReader/Replays/chapter5season5.replay
+  SAMPLE_REPLAY_SHA256: 7d3bd671720a881b489125725d80074ebc691013308c16e1b95304f2be73e267
+
 jobs:
   test-and-build:
     runs-on: windows-latest
@@ -15,32 +20,72 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Construire le lecteur de replays (exe autonome)
+        run: dotnet publish replay_reader/PirateReplayReader -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=none -o build/reader
+
+      - name: Télécharger le replay d'exemple
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force tests/data | Out-Null
+          Invoke-WebRequest $env:SAMPLE_REPLAY_URL -OutFile tests/data/chapter5season5.replay
+          $h = (Get-FileHash tests/data/chapter5season5.replay -Algorithm SHA256).Hash.ToLower()
+          if ($h -ne $env:SAMPLE_REPLAY_SHA256) { throw "Empreinte inattendue : $h" }
+
       - name: Installer les dépendances
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Tests (sous Windows)
+      - name: Tests (sous Windows, avec le vrai lecteur et le vrai replay)
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q
-
-      - name: Vérifier la capture d'écran Windows (dxcam / mss)
-        run: python -c "from pirate_tracker.capture import available_backends, create_capture; print(available_backends()); c = create_capture('mss'); f = c.grab(); print('mss', f.shape); c.close()"
-
-      - name: Construire l'exécutable (PyInstaller)
-        run: pyinstaller packaging/pirate_tracker.spec --noconfirm --distpath dist --workpath build
-
-      - name: Vérifier que l'exe démarre
         shell: pwsh
         run: |
+          $env:PIRATE_REPLAY_READER = (Resolve-Path build/reader/PirateReplayReader.exe).Path
+          python -m pytest -v -rs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Les tests sur replay réel ne doivent pas avoir été ignorés
+          python -m pytest -q -rs tests/test_replays.py -k "real_replay or end_to_end" 2>&1 | Tee-Object -Variable out
+          if ("$out" -match "skipped") { throw "Tests sur replay réel ignorés" }
+
+      - name: Construire l'application (PyInstaller)
+        run: pyinstaller packaging/pirate_tracker.spec --noconfirm --distpath dist --workpath build/pyinstaller
+
+      - name: Vérifier l'exe et le lecteur embarqué
+        shell: pwsh
+        run: |
+          $reader = Get-ChildItem dist/PirateTracker -Recurse -Filter PirateReplayReader.exe | Select-Object -First 1
+          if (-not $reader) { throw "Lecteur de replays absent du paquet" }
+          $json = & $reader.FullName tests/data/chapter5season5.replay | ConvertFrom-Json
+          if (-not $json.ok -or $json.chests.Count -ne 5) { throw "Lecteur embarqué : résultat inattendu ($($json.chests.Count) coffres)" }
+          Write-Host "Lecteur embarqué OK : $($json.chests.Count) coffres pour le propriétaire du replay"
+
           $env:PIRATE_TRACKER_HOME = "$env:RUNNER_TEMP\pt_smoke"
+          $env:LOCALAPPDATA = "$env:RUNNER_TEMP\pt_local"
+          New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\FortniteGame\Saved\Demos" | Out-Null
           $p = Start-Process -FilePath "dist\PirateTracker\PirateTracker.exe" -PassThru
           Start-Sleep -Seconds 15
           if ($p.HasExited) { throw "L'exécutable s'est arrêté (code $($p.ExitCode))" }
           if (-not (Test-Path "$env:PIRATE_TRACKER_HOME\pirate_tracker.db")) { throw "Base de données non créée" }
-          Stop-Process -Id $p.Id -Force
           Write-Host "PirateTracker.exe démarre correctement"
+
+          # Fin de partie simulée : Fortnite dépose un replay dans le dossier Demos
+          $dst = "$env:LOCALAPPDATA\FortniteGame\Saved\Demos\UnsavedReplay-test.replay"
+          Copy-Item tests/data/chapter5season5.replay $dst
+          (Get-Item $dst).LastWriteTime = Get-Date
+          $chests = 0
+          for ($i = 0; $i -lt 18 -and $chests -lt 5; $i++) {
+            Start-Sleep -Seconds 10
+            $chests = python -c "import sqlite3,os; c=sqlite3.connect(os.path.join(os.environ['PIRATE_TRACKER_HOME'],'pirate_tracker.db')); print(c.execute('SELECT COUNT(*) FROM chest_events').fetchone()[0])"
+            Write-Host "Coffres en base après $(($i + 1) * 10) s : $chests"
+          }
+          Stop-Process -Id $p.Id -Force
+          if ([int]$chests -ne 5) { throw "L'application installée n'a pas compté les 5 coffres du replay ($chests)" }
+          Write-Host "Application packagée : replay détecté, analysé et compté (5 coffres)"
 
       - name: Créer l'installateur (Inno Setup)
         shell: pwsh

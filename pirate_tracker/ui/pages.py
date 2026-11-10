@@ -1,17 +1,15 @@
-"""Pages Tableau de bord, Historique et Progression."""
+"""Pages : Tableau de bord, Historique des parties, Récompenses, Étoiles & niveaux."""
 from __future__ import annotations
 
-import os
-import sys
-import time
 from datetime import datetime
 
-from PySide6.QtCore import QRectF, Qt, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QLinearGradient, QPainter, QPen, QRadialGradient
-from PySide6.QtWidgets import (QAbstractItemView, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QMessageBox,
-                               QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout,
-                               QWidget)
+from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen, QRadialGradient
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
+                               QMessageBox, QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem,
+                               QVBoxLayout, QWidget)
 
+from .. import items as items_mod
 from .. import levels
 from . import icons
 from . import theme as T
@@ -29,14 +27,61 @@ def scroll_page(inner: QWidget) -> QScrollArea:
     return sa
 
 
+def make_table(headers: list[str], min_height: int = 0, stretch: int | None = None) -> QTableWidget:
+    t = QTableWidget(0, len(headers))
+    t.setHorizontalHeaderLabels(headers)
+    t.verticalHeader().setVisible(False)
+    t.setAlternatingRowColors(True)
+    t.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    t.setSelectionBehavior(QAbstractItemView.SelectRows)
+    t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+    t.horizontalHeader().setStretchLastSection(False)
+    t.horizontalHeader().setMinimumSectionSize(90)
+    t.setShowGrid(False)
+    if min_height:
+        t.setMinimumHeight(min_height)
+    t.horizontalHeader().setSectionResizeMode(len(headers) - 1 if stretch is None else stretch, QHeaderView.Stretch)
+    return t
+
+
+def cell(text, align=Qt.AlignCenter, color=None, bold=False) -> QTableWidgetItem:
+    it = QTableWidgetItem(str(text))
+    it.setTextAlignment(align)
+    if color:
+        it.setForeground(QColor(color))
+    if bold:
+        f = it.font()
+        f.setBold(True)
+        it.setFont(f)
+    return it
+
+
+def carded(widget: QWidget) -> Card:
+    c = Card()
+    lay = QVBoxLayout(c)
+    lay.setContentsMargins(8, 8, 8, 8)
+    lay.addWidget(widget)
+    return c
+
+
+def playlist_name(p: str | None) -> str:
+    if not p:
+        return "—"
+    s = p.replace("Playlist_", "")
+    low = s.lower()
+    team = "Solo" if "solo" in low else "Duo" if "duo" in low else "Trio" if "trio" in low else \
+        "Escouade" if "squad" in low else ""
+    mode = "Zéro construction" if "nobuild" in low else "Construction" if "default" in low or team else ""
+    out = " · ".join(x for x in (mode, team) if x)
+    return out or s
+
+
 class HeroCard(QWidget):
     """Grand compteur de coffres illustré + niveau et étoiles."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(210)
-        self.total = 0
-        self.level = levels.compute_level(0, [10, 25, 50, 100, 200])
         lay = QHBoxLayout(self)
         lay.setContentsMargins(230, 24, 28, 22)
         col = QVBoxLayout()
@@ -55,17 +100,13 @@ class HeroCard(QWidget):
         self.next_lbl = muted("")
         col.addWidget(cap)
         col.addWidget(self.big)
-        row = QHBoxLayout()
-        row.addWidget(self.level_lbl)
-        row.addStretch(1)
-        col.addLayout(row)
+        col.addWidget(self.level_lbl)
         col.addWidget(self.stars)
         col.addWidget(self.progress)
         col.addWidget(self.next_lbl)
         lay.addLayout(col, 1)
 
     def set_values(self, total: int, st: levels.LevelState, animate=True):
-        self.total = total
         self.big.setText(f"{total:03d}")
         self.level_lbl.setText(f"NIVEAU {st.level}")
         self.stars.set_stars(st.stars, animate)
@@ -73,7 +114,6 @@ class HeroCard(QWidget):
         remaining = st.next_star_at - st.chests_in_level
         nxt = "le niveau suivant" if st.stars == 4 else f"l'étoile {st.stars + 1}"
         self.next_lbl.setText(f"Encore {remaining} coffre{'s' if remaining > 1 else ''} pour {nxt}")
-        self.update()
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -109,8 +149,8 @@ class DashboardPage(QWidget):
         top = QHBoxLayout()
         title_col = QVBoxLayout()
         title_col.addWidget(h1("TABLEAU DE BORD"))
-        self.session_lbl = muted("", wrap=False)
-        title_col.addWidget(self.session_lbl)
+        self.sub_lbl = muted("", wrap=False)
+        title_col.addWidget(self.sub_lbl)
         top.addLayout(title_col, 1)
         self.status = StatusPill()
         top.addWidget(self.status, 0, Qt.AlignTop)
@@ -122,12 +162,12 @@ class DashboardPage(QWidget):
         grid = QGridLayout()
         grid.setSpacing(14)
         self.cards = {
-            "tokens": StatCard("token", "Jetons trouvés", T.GOLD),
+            "last": StatCard("chest_open", "Coffres à la dernière partie", T.VIOLET),
+            "tokens": StatCard("token", "Jetons pirates trouvés", T.GOLD),
             "since": StatCard("flame", "Coffres depuis le dernier jeton", "#fb923c"),
             "today": StatCard("calendar", "Coffres aujourd'hui", T.BLUE),
-            "session": StatCard("chest", "Session en cours", T.VIOLET),
-            "record": StatCard("trophy", "Record (meilleure session)", T.GOLD),
-            "time": StatCard("clock", "Temps de jeu suivi", T.CYAN),
+            "record": StatCard("trophy", "Record (meilleure partie)", T.GOLD),
+            "time": StatCard("clock", "Temps de jeu analysé", T.CYAN),
         }
         for i, c in enumerate(self.cards.values()):
             grid.addWidget(c, i // 3, i % 3)
@@ -138,9 +178,9 @@ class DashboardPage(QWidget):
         charts = QHBoxLayout()
         charts.setSpacing(14)
         self.daily = BarChart("Coffres par jour (14 derniers jours)", T.VIOLET)
-        self.per_session = BarChart("Coffres par session (12 dernières)", T.BLUE)
+        self.per_match = BarChart("Coffres par partie (15 dernières)", T.BLUE)
         charts.addWidget(self.daily)
-        charts.addWidget(self.per_session)
+        charts.addWidget(self.per_match)
         lay.addLayout(charts)
         lay.addStretch(1)
 
@@ -153,21 +193,22 @@ class DashboardPage(QWidget):
         s = tr.stats()
         st = tr.level()
         self.hero.set_values(s.total_chests, st, animate)
+        if s.last_match_chests is None:
+            self.cards["last"].set("—", "aucune partie analysée")
+        else:
+            when = datetime.fromtimestamp(s.last_match_at).strftime("%d/%m %H:%M")
+            place = f" · {s.last_match_placement}e" if s.last_match_placement else ""
+            self.cards["last"].set(str(s.last_match_chests), f"{when}{place}")
         self.cards["tokens"].set(str(s.total_tokens),
                                  f"Meilleure chance : {s.fewest_chests_for_token} coffres" if s.fewest_chests_for_token else "")
         self.cards["since"].set(f"{s.since_last_token:03d}")
         self.cards["today"].set(str(s.today_chests), f"Meilleur jour : {s.best_day}")
-        self.cards["session"].set(str(s.session_chests), fmt_duration(s.session_seconds) if tr.session_id else "aucune session")
-        self.cards["record"].set(str(s.best_session), f"{s.sessions_count} session{'s' if s.sessions_count > 1 else ''}")
+        self.cards["record"].set(str(s.best_match), f"{s.matches_count} partie{'s' if s.matches_count > 1 else ''}")
         self.cards["time"].set(fmt_duration(s.tracked_seconds))
-        self.session_lbl.setText(
-            f"Session n°{tr.session_id} en cours" if tr.session_id else "Aucune session — lancez Fortnite pour démarrer"
-        )
+        self.sub_lbl.setText("Mis à jour automatiquement à la fin de chaque partie, grâce aux replays de Fortnite")
 
         db = tr.db
-        pts = db.cumulative_series()
-        marks = [row["ts"] for row in db.tokens()]
-        self.line.set_data(pts, marks)
+        self.line.set_data(db.cumulative_series(), [row["ts"] for row in db.tokens()])
         today = datetime.now().date()
         counts = dict(db.daily_counts(14))
         days = []
@@ -175,8 +216,9 @@ class DashboardPage(QWidget):
             d = datetime.fromordinal(today.toordinal() - i).date()
             days.append((d.strftime("%d/%m"), counts.get(d.isoformat(), 0)))
         self.daily.set_data(days if any(v for _, v in days) else [])
-        sess = list(reversed(db.sessions(12)))
-        self.per_session.set_data([(f"#{r.id}", r.chests) for r in sess])
+        ms = [m for m in tr.db.matches(15) if m.ok]
+        self.per_match.set_data([(datetime.fromtimestamp(m.started_at).strftime("%d/%m"), m.chests)
+                                 for m in reversed(ms)])
 
     def set_status(self, level, message):
         self.status.set_status(level, message)
@@ -196,72 +238,179 @@ class HistoryPage(QWidget):
             b.clicked.connect(fn)
             top.addWidget(b)
         lay.addLayout(top)
-        lay.addWidget(muted("Chaque session est enregistrée automatiquement, du lancement à la fermeture de Fortnite."))
+        lay.addWidget(muted("Chaque partie est ajoutée automatiquement quand Fortnite termine d'écrire son replay. "
+                            "Sélectionnez une partie pour voir les objets obtenus."))
 
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["Date", "Heure", "Durée", "Coffres", "Jetons", "Coffres depuis le dernier jeton"])
-        self.table.verticalHeader().setVisible(False)
-        self.table.setAlternatingRowColors(True)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.setShowGrid(False)
-        card = Card()
-        cl = QVBoxLayout(card)
-        cl.setContentsMargins(8, 8, 8, 8)
-        cl.addWidget(self.table)
-        lay.addWidget(card, 3)
+        self.table = make_table(["Date", "Durée", "Mode", "Classement", "Élim.", "Coffres", "Jetons", "Analyse"],
+                                stretch=2)
+        self.table.itemSelectionChanged.connect(self._show_items)
+        lay.addWidget(carded(self.table), 3)
 
-        lay.addWidget(h2("Jetons pirates trouvés"))
-        self.tokens = QTableWidget(0, 4)
-        self.tokens.setHorizontalHeaderLabels(["Date", "Coffres avant de le trouver", "Confiance", "Capture"])
-        self.tokens.verticalHeader().setVisible(False)
-        self.tokens.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.tokens.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.tokens.setShowGrid(False)
-        self.tokens.cellDoubleClicked.connect(self._open_capture)
-        card2 = Card()
-        c2 = QVBoxLayout(card2)
-        c2.setContentsMargins(8, 8, 8, 8)
-        c2.addWidget(self.tokens)
-        lay.addWidget(card2, 1)
-
-    @staticmethod
-    def _item(text, align=Qt.AlignCenter, color=None):
-        it = QTableWidgetItem(str(text))
-        it.setTextAlignment(align)
-        if color:
-            it.setForeground(QColor(color))
-        return it
+        row = QHBoxLayout()
+        self.detail_title = h2("Objets obtenus pendant la partie")
+        row.addWidget(self.detail_title, 1)
+        self.del_btn = QPushButton("Retirer cette partie du compteur")
+        self.del_btn.setObjectName("danger")
+        self.del_btn.clicked.connect(self._delete)
+        row.addWidget(self.del_btn)
+        lay.addLayout(row)
+        self.items = make_table(["Moment", "Objet", "Rareté", "Quantité"], stretch=1)
+        lay.addWidget(carded(self.items), 2)
+        self._rows = []
 
     def refresh(self, *_):
-        rows = self.ctx.tracker.db.sessions()
-        self.table.setRowCount(len(rows))
-        for i, r in enumerate(rows):
-            d = datetime.fromtimestamp(r.started_at)
-            live = r.ended_at is None
-            self.table.setItem(i, 0, self._item(d.strftime("%d/%m/%Y")))
-            self.table.setItem(i, 1, self._item(d.strftime("%H:%M") + ("  • en cours" if live else ""),
-                                                color=T.GREEN if live else None))
-            self.table.setItem(i, 2, self._item(fmt_duration(r.duration)))
-            self.table.setItem(i, 3, self._item(r.chests, color=T.GOLD))
-            self.table.setItem(i, 4, self._item(r.tokens, color=T.GOLD if r.tokens else None))
-            self.table.setItem(i, 5, self._item(r.since_token_at_end))
-        toks = self.ctx.tracker.db.tokens()
-        self.tokens.setRowCount(len(toks))
-        for i, t in enumerate(toks):
-            self.tokens.setItem(i, 0, self._item(datetime.fromtimestamp(t["ts"]).strftime("%d/%m/%Y %H:%M")))
-            self.tokens.setItem(i, 1, self._item(t["chests_since_previous"], color=T.GOLD))
-            self.tokens.setItem(i, 2, self._item(f"{t['confidence'] * 100:.0f} %"))
-            it = self._item("Ouvrir (double-clic)" if t["screenshot"] else "—")
-            it.setData(Qt.UserRole, t["screenshot"])
-            self.tokens.setItem(i, 3, it)
+        self._rows = self.ctx.tracker.db.matches()
+        self.table.setRowCount(len(self._rows))
+        for i, m in enumerate(self._rows):
+            d = datetime.fromtimestamp(m.started_at)
+            self.table.setItem(i, 0, cell(d.strftime("%d/%m/%Y %H:%M")))
+            self.table.setItem(i, 1, cell(fmt_duration(m.duration)))
+            self.table.setItem(i, 2, cell(playlist_name(m.playlist)))
+            place = f"{m.placement}e / {m.total_players}" if m.placement and m.total_players else (
+                f"{m.placement}e" if m.placement else "—")
+            self.table.setItem(i, 3, cell(place, color=T.GOLD if m.placement == 1 else None))
+            self.table.setItem(i, 4, cell("—" if m.eliminations is None else m.eliminations))
+            self.table.setItem(i, 5, cell(m.chests, color=T.GOLD, bold=True))
+            self.table.setItem(i, 6, cell(m.tokens, color=T.GOLD if m.tokens else None))
+            if not m.ok:
+                status = cell("Échec", color=T.RED)
+                status.setToolTip(m.error or "")
+            elif m.warnings:
+                status = cell("OK (avertissement)", color=T.ORANGE)
+                status.setToolTip("\n".join(m.warnings))
+            else:
+                status = cell("OK", color=T.GREEN)
+            self.table.setItem(i, 7, status)
+        self._show_items()
 
-    def _open_capture(self, row, col):
-        it = self.tokens.item(row, 3)
-        path = it.data(Qt.UserRole) if it else None
-        if path and os.path.exists(path):
-            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+    def _selected(self):
+        rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
+        if rows and rows[0].row() < len(self._rows):
+            return self._rows[rows[0].row()]
+        return None
+
+    def _show_items(self):
+        m = self._selected()
+        self.del_btn.setEnabled(m is not None)
+        if m is None:
+            self.items.setRowCount(0)
+            self.detail_title.setText("Objets obtenus pendant la partie (sélectionnez une partie)")
+            return
+        rows = self.ctx.tracker.db.match_items(m.id)
+        self.detail_title.setText(f"Objets obtenus pendant la partie du "
+                                  f"{datetime.fromtimestamp(m.started_at):%d/%m/%Y %H:%M} ({len(rows)})")
+        self.items.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            info = items_mod.describe(r["item"])
+            t = r["ts"] - m.started_at
+            self.items.setItem(i, 0, cell(f"{int(t // 60):02d}:{int(t % 60):02d}"))
+            name = cell(info.name, Qt.AlignLeft | Qt.AlignVCenter, info.color)
+            name.setToolTip(r["item"])
+            self.items.setItem(i, 1, name)
+            self.items.setItem(i, 2, cell(info.rarity or "—", color=info.color))
+            self.items.setItem(i, 3, cell(r["count"] or 1))
+
+    def _delete(self):
+        m = self._selected()
+        if m and QMessageBox.question(self, "Retirer la partie",
+                                      "Retirer cette partie et ses coffres du compteur ?") == QMessageBox.Yes:
+            self.ctx.tracker.delete_match(m.id)
+
+
+class RewardsPage(QWidget):
+    """Tout ce que le joueur a déjà obtenu (objets ramassés) + désignation du jeton pirate."""
+
+    FILTERS = [("all", "Tout"), ("arme", "Armes"), ("soin", "Soins"), ("objet", "Objets"),
+               ("matériaux", "Matériaux"), ("munitions", "Munitions")]
+
+    def __init__(self, ctx, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 24, 28, 28)
+        lay.setSpacing(14)
+        top = QHBoxLayout()
+        top.addWidget(h1("RÉCOMPENSES OBTENUES"), 1)
+        self.filter = QComboBox()
+        for k, lbl in self.FILTERS:
+            self.filter.addItem(lbl, k)
+        self.filter.setCurrentIndex(1)
+        self.filter.currentIndexChanged.connect(self.refresh)
+        top.addWidget(self.filter)
+        lay.addLayout(top)
+
+        self.summary = QHBoxLayout()
+        self.cards = {
+            "distinct": StatCard("list", "Objets différents obtenus", T.VIOLET),
+            "legend": StatCard("star", "Objets légendaires / mythiques", T.GOLD),
+            "tokens": StatCard("token", "Jetons pirates", T.GOLD),
+        }
+        for c in self.cards.values():
+            self.summary.addWidget(c)
+        lay.addLayout(self.summary)
+
+        lay.addWidget(muted("Le jeton pirate est reconnu automatiquement d'après le nom de l'objet dans le replay. "
+                            "Si son nom n'est pas reconnu, sélectionnez-le dans la liste puis cliquez sur "
+                            "« C'est le jeton pirate » : toutes vos parties seront recalculées."))
+        self.table = make_table(["Objet", "Rareté", "Obtenu", "Quantité totale", "Parties", "Première fois",
+                                 "Jeton pirate"], stretch=0)
+        lay.addWidget(carded(self.table), 1)
+        row = QHBoxLayout()
+        self.mark_btn = QPushButton("C'est le jeton pirate")
+        self.mark_btn.setObjectName("gold")
+        self.mark_btn.clicked.connect(lambda: self._mark(True))
+        self.unmark_btn = QPushButton("Ce n'est pas le jeton")
+        self.unmark_btn.clicked.connect(lambda: self._mark(False))
+        row.addWidget(self.mark_btn)
+        row.addWidget(self.unmark_btn)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self._raw: list[str] = []
+
+    def refresh(self, *_):
+        tr = self.ctx.tracker
+        is_token = tr.token_matcher()
+        flt = self.filter.currentData()
+        rows = tr.db.item_totals()
+        shown = []
+        legend = 0
+        for r in rows:
+            info = items_mod.describe(r["item"])
+            if info.rarity in ("Légendaire", "Mythique"):
+                legend += 1
+            if flt != "all" and info.category != flt and not is_token(r["item"]):
+                continue
+            shown.append((r, info))
+        shown.sort(key=lambda x: (not is_token(x[0]["item"]),
+                                  ["Mythique", "Légendaire", "Épique", "Rare", "Peu commun", "Commun", ""].index(
+                                      x[1].rarity) if x[1].rarity in ("Mythique", "Légendaire", "Épique", "Rare",
+                                                                      "Peu commun", "Commun") else 6,
+                                  -x[0]["times"]))
+        self.cards["distinct"].set(str(len(rows)))
+        self.cards["legend"].set(str(legend))
+        self.cards["tokens"].set(str(tr.stats().total_tokens))
+        self._raw = []
+        self.table.setRowCount(len(shown))
+        for i, (r, info) in enumerate(shown):
+            tok = is_token(r["item"])
+            name = cell(info.name, Qt.AlignLeft | Qt.AlignVCenter, T.GOLD if tok else info.color, bold=tok)
+            name.setToolTip(r["item"])
+            self.table.setItem(i, 0, name)
+            self.table.setItem(i, 1, cell(info.rarity or "—", color=info.color))
+            self.table.setItem(i, 2, cell(f"{r['times']} fois"))
+            self.table.setItem(i, 3, cell(r["quantity"] or "—"))
+            self.table.setItem(i, 4, cell(r["matches"]))
+            self.table.setItem(i, 5, cell(datetime.fromtimestamp(r["first_ts"]).strftime("%d/%m/%Y")))
+            self.table.setItem(i, 6, cell("OUI" if tok else "", color=T.GOLD, bold=True))
+            self._raw.append(r["item"])
+
+    def _mark(self, on: bool):
+        rows = self.table.selectionModel().selectedRows()
+        if not rows:
+            QMessageBox.information(self, "Jeton pirate", "Sélectionnez d'abord un objet dans la liste.")
+            return
+        raw = self._raw[rows[0].row()]
+        self.ctx.tracker.mark_token_item(raw, on)
 
 
 class ProgressPage(QWidget):
@@ -320,18 +469,8 @@ class ProgressPage(QWidget):
         lay.addWidget(th)
 
         lay.addWidget(h2("Historique des niveaux"))
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Date", "Évènement", "Niveau", "Coffres au total"])
-        self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.setShowGrid(False)
-        self.table.setMinimumHeight(260)
-        hc = Card()
-        hl = QVBoxLayout(hc)
-        hl.setContentsMargins(8, 8, 8, 8)
-        hl.addWidget(self.table)
-        lay.addWidget(hc)
+        self.table = make_table(["Date", "Évènement", "Niveau", "Coffres au total"], 260, stretch=1)
+        lay.addWidget(carded(self.table))
         lay.addStretch(1)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -352,15 +491,12 @@ class ProgressPage(QWidget):
         rows = tr.db.level_history()
         self.table.setRowCount(len(rows))
         for i, r in enumerate(rows):
-            vals = [datetime.fromtimestamp(r["ts"]).strftime("%d/%m/%Y %H:%M"),
-                    "Nouveau niveau !" if r["kind"] == "level" else f"Étoile {r['stars']} obtenue",
-                    r["level"], r["total_chests"]]
-            for j, v in enumerate(vals):
-                it = QTableWidgetItem(str(v))
-                it.setTextAlignment(Qt.AlignCenter)
-                if j == 1 and r["kind"] == "level":
-                    it.setForeground(QColor(T.GOLD))
-                self.table.setItem(i, j, it)
+            lvl = r["kind"] == "level"
+            self.table.setItem(i, 0, cell(datetime.fromtimestamp(r["ts"]).strftime("%d/%m/%Y %H:%M")))
+            self.table.setItem(i, 1, cell("Nouveau niveau !" if lvl else f"Étoile {r['stars']} obtenue",
+                                          color=T.GOLD if lvl else None))
+            self.table.setItem(i, 2, cell(r["level"]))
+            self.table.setItem(i, 3, cell(r["total_chests"]))
 
     def _save(self):
         vals = [sp.value() for sp in self.spins]

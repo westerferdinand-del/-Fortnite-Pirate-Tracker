@@ -1,4 +1,4 @@
-"""Stockage local SQLite des sessions, coffres, jetons et niveaux."""
+"""Stockage local SQLite : parties (une par replay), coffres, objets obtenus, jetons, niveaux."""
 from __future__ import annotations
 
 import csv
@@ -6,34 +6,54 @@ import json
 import sqlite3
 import threading
 import time
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .paths import data_dir
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS sessions (
+CREATE TABLE IF NOT EXISTS matches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    replay_path TEXT NOT NULL UNIQUE,
+    replay_size INTEGER NOT NULL DEFAULT 0,
+    replay_mtime REAL NOT NULL DEFAULT 0,
+    session_id TEXT,
     started_at REAL NOT NULL,
-    ended_at REAL,
-    last_seen REAL NOT NULL
+    duration REAL NOT NULL DEFAULT 0,
+    chests INTEGER NOT NULL DEFAULT 0,
+    placement INTEGER,
+    total_players INTEGER,
+    eliminations INTEGER,
+    playlist TEXT,
+    player_name TEXT,
+    branch TEXT,
+    ok INTEGER NOT NULL DEFAULT 1,
+    error TEXT,
+    warnings TEXT,
+    processed_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS chest_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+    match_id INTEGER REFERENCES matches(id) ON DELETE CASCADE,
     ts REAL NOT NULL,
-    confidence REAL NOT NULL DEFAULT 1.0,
-    method TEXT NOT NULL DEFAULT ''
+    t_in_match REAL,
+    kind TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+    ts REAL NOT NULL,
+    item TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS token_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+    match_id INTEGER REFERENCES matches(id) ON DELETE CASCADE,
     ts REAL NOT NULL,
-    confidence REAL NOT NULL DEFAULT 1.0,
+    item TEXT,
     total_chests_at INTEGER NOT NULL,
-    chests_since_previous INTEGER NOT NULL,
-    screenshot TEXT
+    chests_since_previous INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS level_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,7 +65,8 @@ CREATE TABLE IF NOT EXISTS level_events (
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX IF NOT EXISTS idx_chest_ts ON chest_events(ts);
-CREATE INDEX IF NOT EXISTS idx_chest_session ON chest_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_chest_match ON chest_events(match_id);
+CREATE INDEX IF NOT EXISTS idx_items_match ON items(match_id);
 """
 
 
@@ -55,26 +76,46 @@ class Stats:
     total_tokens: int = 0
     since_last_token: int = 0
     today_chests: int = 0
-    session_chests: int = 0
-    session_tokens: int = 0
-    best_session: int = 0
+    last_match_chests: int | None = None
+    last_match_at: float | None = None
+    last_match_placement: int | None = None
+    best_match: int = 0
     best_day: int = 0
     fewest_chests_for_token: int | None = None
     tracked_seconds: float = 0.0
-    session_seconds: float = 0.0
-    sessions_count: int = 0
-    extra: dict = field(default_factory=dict)
+    matches_count: int = 0
+    distinct_items: int = 0
 
 
 @dataclass
-class SessionRow:
+class MatchRow:
     id: int
     started_at: float
-    ended_at: float | None
     duration: float
     chests: int
     tokens: int
-    since_token_at_end: int
+    placement: int | None
+    total_players: int | None
+    eliminations: int | None
+    playlist: str | None
+    ok: bool
+    error: str | None
+    warnings: list
+    replay_path: str
+
+
+def _ts(iso: str | None, fallback: float) -> float:
+    if not iso:
+        return fallback
+    try:
+        s = iso.replace("Z", "")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        t = dt.timestamp()
+        return t if t > 946684800 else fallback  # date invalide (avant 2000)
+    except ValueError:
+        return fallback
 
 
 class Database:
@@ -85,73 +126,84 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
+        self._migrate_v1()
         self.conn.executescript(SCHEMA)
         self.conn.commit()
-        self._close_dangling_sessions()
 
-    # ------------------------------------------------------------------ sessions
-    def _close_dangling_sessions(self) -> None:
-        """Sessions non terminées (crash, extinction du PC) : clôturées à leur dernière activité."""
-        with self._lock:
-            self.conn.execute("UPDATE sessions SET ended_at = last_seen WHERE ended_at IS NULL")
+    def _migrate_v1(self) -> None:
+        """La version 1 (reconnaissance d'écran) utilisait d'autres tables : on les met de côté."""
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(chest_events)")}
+        if cols and "match_id" not in cols:
+            for t in ("chest_events", "token_events", "sessions"):
+                try:
+                    self.conn.execute(f"ALTER TABLE {t} RENAME TO v1_{t}")
+                except sqlite3.OperationalError:
+                    pass
             self.conn.commit()
 
-    def start_session(self, ts: float | None = None) -> int:
-        ts = ts or time.time()
+    # ------------------------------------------------------------------ replays
+    def is_processed(self, path: str, size: int, mtime: float) -> bool:
         with self._lock:
-            cur = self.conn.execute("INSERT INTO sessions(started_at, last_seen) VALUES (?, ?)", (ts, ts))
-            self.conn.commit()
-            return int(cur.lastrowid)
+            row = self.conn.execute(
+                "SELECT replay_size, replay_mtime FROM matches WHERE replay_path=?", (path,)
+            ).fetchone()
+        return bool(row) and row["replay_size"] == size and abs(row["replay_mtime"] - mtime) < 1e-3
 
-    def heartbeat(self, session_id: int, ts: float | None = None) -> None:
-        with self._lock:
-            self.conn.execute("UPDATE sessions SET last_seen=? WHERE id=?", (ts or time.time(), session_id))
-            self.conn.commit()
+    def upsert_match(self, res: dict, size: int = 0, mtime: float = 0.0) -> dict:
+        """Enregistre (ou remplace) le résultat d'analyse d'un replay.
 
-    def end_session(self, session_id: int, ts: float | None = None) -> None:
-        ts = ts or time.time()
+        Retourne ``{match_id, chests, delta, items, replaced}`` où ``delta`` est la
+        variation du nombre total de coffres (0 si le replay avait déjà été compté).
+        """
+        path = res.get("file") or ""
+        now = time.time()
+        fallback = (mtime - float(res.get("duration_s") or 0)) if mtime else now
+        started = _ts(res.get("started_utc"), fallback)
+        chests = (res.get("chests") or []) if res.get("ok") else []
+        items = (res.get("items") or []) if res.get("ok") else []
         with self._lock:
-            self.conn.execute(
-                "UPDATE sessions SET ended_at=?, last_seen=? WHERE id=? AND ended_at IS NULL", (ts, ts, session_id)
-            )
-            # Une session vide de moins de 60 s n'a pas d'intérêt dans l'historique
-            self.conn.execute(
-                """DELETE FROM sessions WHERE id=? AND (ended_at - started_at) < 60
-                   AND NOT EXISTS (SELECT 1 FROM chest_events WHERE session_id=sessions.id)
-                   AND NOT EXISTS (SELECT 1 FROM token_events WHERE session_id=sessions.id)""",
-                (session_id,),
-            )
-            self.conn.commit()
-
-    # ------------------------------------------------------------------ events
-    def add_chest(self, session_id: int | None, confidence: float = 1.0, method: str = "", ts: float | None = None) -> int:
-        with self._lock:
+            old = self.conn.execute("SELECT id, chests FROM matches WHERE replay_path=?", (path,)).fetchone()
+            old_chests = old["chests"] if old else 0
+            if old:
+                self.conn.execute("DELETE FROM matches WHERE id=?", (old["id"],))  # cascade : coffres, objets, jetons
             cur = self.conn.execute(
-                "INSERT INTO chest_events(session_id, ts, confidence, method) VALUES (?,?,?,?)",
-                (session_id, ts or time.time(), float(confidence), method),
+                """INSERT INTO matches(replay_path, replay_size, replay_mtime, session_id, started_at, duration, chests,
+                       placement, total_players, eliminations, playlist, player_name, branch, ok, error, warnings,
+                       processed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (path, int(size), float(mtime), res.get("session_id"), started, float(res.get("duration_s") or 0),
+                 len(chests), res.get("placement"), res.get("total_players"), res.get("eliminations"),
+                 res.get("playlist"), res.get("player_name"), res.get("branch"), 1 if res.get("ok") else 0,
+                 res.get("error"), json.dumps(res.get("warnings") or [], ensure_ascii=False), now),
+            )
+            mid = int(cur.lastrowid)
+            self.conn.executemany(
+                "INSERT INTO chest_events(match_id, ts, t_in_match, kind) VALUES (?,?,?,?)",
+                [(mid, started + float(c.get("t", 0)), float(c.get("t", 0)), c.get("kind", "")) for c in chests],
+            )
+            self.conn.executemany(
+                "INSERT INTO items(match_id, ts, item, count) VALUES (?,?,?,?)",
+                [(mid, started + float(i.get("t", 0)), i.get("item", ""), int(i.get("count") or 0)) for i in items],
             )
             self.conn.commit()
-            return int(cur.lastrowid)
+        return {"match_id": mid, "chests": len(chests), "delta": len(chests) - old_chests,
+                "items": items, "replaced": bool(old), "started_at": started}
 
-    def remove_last_chest(self) -> bool:
-        """Correction d'un faux positif : supprime le dernier coffre enregistré."""
+    def delete_match(self, match_id: int) -> None:
         with self._lock:
-            row = self.conn.execute("SELECT id FROM chest_events ORDER BY id DESC LIMIT 1").fetchone()
-            if not row:
-                return False
-            self.conn.execute("DELETE FROM chest_events WHERE id=?", (row["id"],))
+            self.conn.execute("DELETE FROM matches WHERE id=?", (match_id,))
             self.conn.commit()
-            return True
 
-    def add_token(self, session_id: int | None, confidence: float, screenshot: str | None = None, ts: float | None = None) -> dict:
+    # ------------------------------------------------------------------ jetons / niveaux
+    def add_token(self, match_id: int | None, item: str, ts: float | None = None) -> dict:
         with self._lock:
-            total = self.total_chests()
-            last = self.conn.execute("SELECT total_chests_at FROM token_events ORDER BY id DESC LIMIT 1").fetchone()
+            ts = ts or time.time()
+            total = self._scalar("SELECT COUNT(*) FROM chest_events WHERE ts <= ?", (ts,))
+            last = self.conn.execute("SELECT total_chests_at FROM token_events ORDER BY ts DESC LIMIT 1").fetchone()
             since = total - (last["total_chests_at"] if last else 0)
             cur = self.conn.execute(
-                """INSERT INTO token_events(session_id, ts, confidence, total_chests_at, chests_since_previous, screenshot)
-                   VALUES (?,?,?,?,?,?)""",
-                (session_id, ts or time.time(), float(confidence), total, since, screenshot),
+                """INSERT INTO token_events(match_id, ts, item, total_chests_at, chests_since_previous)
+                   VALUES (?,?,?,?,?)""",
+                (match_id, ts, item, total, since),
             )
             self.conn.commit()
             return {"id": int(cur.lastrowid), "total_chests_at": total, "chests_since_previous": since}
@@ -164,7 +216,7 @@ class Database:
             )
             self.conn.commit()
 
-    # ------------------------------------------------------------------ queries
+    # ------------------------------------------------------------------ requêtes
     def _scalar(self, sql: str, args: tuple = ()) -> int:
         with self._lock:
             row = self.conn.execute(sql, args).fetchone()
@@ -173,21 +225,24 @@ class Database:
     def total_chests(self) -> int:
         return self._scalar("SELECT COUNT(*) FROM chest_events")
 
-    def stats(self, session_id: int | None = None, now: float | None = None) -> Stats:
+    def stats(self, now: float | None = None) -> Stats:
         now = now or time.time()
         s = Stats()
         with self._lock:
             s.total_chests = self.total_chests()
             s.total_tokens = self._scalar("SELECT COUNT(*) FROM token_events")
-            last = self.conn.execute("SELECT total_chests_at FROM token_events ORDER BY id DESC LIMIT 1").fetchone()
+            last = self.conn.execute("SELECT total_chests_at FROM token_events ORDER BY ts DESC LIMIT 1").fetchone()
             s.since_last_token = s.total_chests - (last["total_chests_at"] if last else 0)
             s.today_chests = self._scalar(
                 "SELECT COUNT(*) FROM chest_events WHERE date(ts,'unixepoch','localtime') = date(?,'unixepoch','localtime')",
                 (now,),
             )
-            s.best_session = self._scalar(
-                "SELECT MAX(c) FROM (SELECT COUNT(*) c FROM chest_events WHERE session_id IS NOT NULL GROUP BY session_id)"
-            )
+            lm = self.conn.execute(
+                "SELECT chests, started_at, placement FROM matches WHERE ok=1 ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+            if lm:
+                s.last_match_chests, s.last_match_at, s.last_match_placement = lm["chests"], lm["started_at"], lm["placement"]
+            s.best_match = self._scalar("SELECT MAX(chests) FROM matches WHERE ok=1")
             s.best_day = self._scalar(
                 "SELECT MAX(c) FROM (SELECT COUNT(*) c FROM chest_events GROUP BY date(ts,'unixepoch','localtime'))"
             )
@@ -195,41 +250,47 @@ class Database:
                 "SELECT MIN(chests_since_previous) FROM token_events WHERE chests_since_previous > 0"
             ).fetchone()
             s.fewest_chests_for_token = row[0] if row and row[0] is not None else None
-            row = self.conn.execute(
-                "SELECT SUM(COALESCE(ended_at, ?) - started_at), COUNT(*) FROM sessions", (now,)
-            ).fetchone()
+            row = self.conn.execute("SELECT SUM(duration), COUNT(*) FROM matches WHERE ok=1").fetchone()
             s.tracked_seconds = float(row[0] or 0.0)
-            s.sessions_count = int(row[1] or 0)
-            if session_id is not None:
-                s.session_chests = self._scalar("SELECT COUNT(*) FROM chest_events WHERE session_id=?", (session_id,))
-                s.session_tokens = self._scalar("SELECT COUNT(*) FROM token_events WHERE session_id=?", (session_id,))
-                row = self.conn.execute("SELECT started_at, ended_at FROM sessions WHERE id=?", (session_id,)).fetchone()
-                if row:
-                    s.session_seconds = (row["ended_at"] or now) - row["started_at"]
+            s.matches_count = int(row[1] or 0)
+            s.distinct_items = self._scalar("SELECT COUNT(DISTINCT item) FROM items")
         return s
 
-    def sessions(self, limit: int = 500) -> list[SessionRow]:
-        now = time.time()
+    def matches(self, limit: int = 1000) -> list[MatchRow]:
         with self._lock:
             rows = self.conn.execute(
-                """SELECT s.id, s.started_at, s.ended_at,
-                          (SELECT COUNT(*) FROM chest_events c WHERE c.session_id=s.id) AS chests,
-                          (SELECT COUNT(*) FROM token_events t WHERE t.session_id=s.id) AS tokens,
-                          (SELECT MAX(c.id) FROM chest_events c WHERE c.session_id=s.id) AS last_chest
-                   FROM sessions s ORDER BY s.started_at DESC LIMIT ?""",
+                """SELECT m.*, (SELECT COUNT(*) FROM token_events t WHERE t.match_id=m.id) AS tokens
+                   FROM matches m ORDER BY m.started_at DESC LIMIT ?""",
                 (limit,),
             ).fetchall()
-            out = []
-            for r in rows:
-                end_ts = r["ended_at"] or now
-                total_at_end = self._scalar("SELECT COUNT(*) FROM chest_events WHERE ts <= ?", (end_ts,))
-                tok = self.conn.execute(
-                    "SELECT total_chests_at FROM token_events WHERE ts <= ? ORDER BY ts DESC LIMIT 1", (end_ts,)
-                ).fetchone()
-                since = total_at_end - (tok["total_chests_at"] if tok else 0)
-                out.append(SessionRow(r["id"], r["started_at"], r["ended_at"], end_ts - r["started_at"],
-                                      r["chests"], r["tokens"], since))
+        out = []
+        for r in rows:
+            try:
+                warns = json.loads(r["warnings"] or "[]")
+            except json.JSONDecodeError:
+                warns = []
+            out.append(MatchRow(r["id"], r["started_at"], r["duration"], r["chests"], r["tokens"], r["placement"],
+                                r["total_players"], r["eliminations"], r["playlist"], bool(r["ok"]), r["error"],
+                                warns, r["replay_path"]))
         return out
+
+    def last_match_id(self) -> int | None:
+        with self._lock:
+            row = self.conn.execute("SELECT id FROM matches WHERE ok=1 ORDER BY started_at DESC LIMIT 1").fetchone()
+        return row["id"] if row else None
+
+    def item_totals(self) -> list[sqlite3.Row]:
+        """Objets obtenus : nombre de fois, quantité totale, première et dernière fois."""
+        with self._lock:
+            return self.conn.execute(
+                """SELECT item, COUNT(*) AS times, SUM(count) AS quantity, MIN(ts) AS first_ts, MAX(ts) AS last_ts,
+                          COUNT(DISTINCT match_id) AS matches
+                   FROM items GROUP BY item ORDER BY times DESC"""
+            ).fetchall()
+
+    def match_items(self, match_id: int) -> list[sqlite3.Row]:
+        with self._lock:
+            return self.conn.execute("SELECT * FROM items WHERE match_id=? ORDER BY ts", (match_id,)).fetchall()
 
     def daily_counts(self, days: int = 30) -> list[tuple[str, int]]:
         with self._lock:
@@ -260,11 +321,22 @@ class Database:
         with self._lock:
             return self.conn.execute("SELECT * FROM level_events ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
 
+    def get_meta(self, key: str, default: str | None = None) -> str | None:
+        with self._lock:
+            row = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._lock:
+            self.conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?,?)", (key, value))
+            self.conn.commit()
+
     # ------------------------------------------------------------------ maintenance
     def reset(self) -> None:
         with self._lock:
             self.conn.executescript(
-                "DELETE FROM chest_events; DELETE FROM token_events; DELETE FROM level_events; DELETE FROM sessions;"
+                "DELETE FROM chest_events; DELETE FROM items; DELETE FROM token_events; DELETE FROM level_events;"
+                "DELETE FROM matches;"
             )
             self.conn.commit()
 
@@ -279,11 +351,11 @@ class Database:
 
     def restore(self, src: Path) -> None:
         """Remplace toutes les données par celles d'une sauvegarde .db."""
-        src_conn = sqlite3.connect(str(src))
+        check = sqlite3.connect(str(src))
         try:
-            src_conn.execute("SELECT COUNT(*) FROM chest_events").fetchone()
+            check.execute("SELECT COUNT(*) FROM matches").fetchone()
         finally:
-            src_conn.close()
+            check.close()
         with self._lock:
             src_conn = sqlite3.connect(str(src))
             src_conn.backup(self.conn)
@@ -293,28 +365,23 @@ class Database:
 
     def export_json(self, dest: Path) -> Path:
         with self._lock:
-            payload = {
-                "exported_at": datetime.now().isoformat(timespec="seconds"),
-                "sessions": [dict(r) for r in self.conn.execute("SELECT * FROM sessions")],
-                "chest_events": [dict(r) for r in self.conn.execute("SELECT * FROM chest_events")],
-                "token_events": [dict(r) for r in self.conn.execute("SELECT * FROM token_events")],
-                "level_events": [dict(r) for r in self.conn.execute("SELECT * FROM level_events")],
-            }
+            payload = {"exported_at": datetime.now().isoformat(timespec="seconds")}
+            for t in ("matches", "chest_events", "items", "token_events", "level_events"):
+                payload[t] = [dict(r) for r in self.conn.execute(f"SELECT * FROM {t}")]
         Path(dest).write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
         return Path(dest)
 
     def export_csv(self, dest: Path) -> Path:
-        rows = self.sessions(limit=100000)
+        rows = self.matches(limit=1_000_000)
         with open(dest, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f, delimiter=";")
-            w.writerow(["session", "debut", "fin", "duree_min", "coffres", "jetons", "coffres_depuis_dernier_jeton"])
+            w.writerow(["partie", "date", "duree_min", "mode", "classement", "joueurs", "eliminations",
+                        "coffres", "jetons", "replay"])
             for r in rows:
-                w.writerow([
-                    r.id,
-                    datetime.fromtimestamp(r.started_at).strftime("%Y-%m-%d %H:%M:%S"),
-                    datetime.fromtimestamp(r.ended_at).strftime("%Y-%m-%d %H:%M:%S") if r.ended_at else "en cours",
-                    round(r.duration / 60, 1), r.chests, r.tokens, r.since_token_at_end,
-                ])
+                w.writerow([r.id, datetime.fromtimestamp(r.started_at).strftime("%Y-%m-%d %H:%M:%S"),
+                            round(r.duration / 60, 1), r.playlist or "", r.placement or "", r.total_players or "",
+                            r.eliminations if r.eliminations is not None else "", r.chests, r.tokens,
+                            Path(r.replay_path).name])
         return Path(dest)
 
     def close(self) -> None:
@@ -334,4 +401,3 @@ def auto_backup(db: Database, keep: int = 10) -> Path:
         except OSError:
             pass
     return dest
-

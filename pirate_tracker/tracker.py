@@ -1,31 +1,24 @@
-"""Logique métier : sessions, compteur automatique, niveaux, records, jetons.
+"""Logique métier : enregistre chaque partie analysée, niveaux, records, jetons pirates.
 
-Indépendant de l'interface graphique : reçoit les évènements du moteur de
-détection, les enregistre en base et notifie les abonnés.
+Indépendant de l'interface : reçoit les résultats du lecteur de replays et notifie les abonnés.
 """
 from __future__ import annotations
 
 import threading
-import time
-from datetime import datetime
 from typing import Callable
 
+from . import items as items_mod
 from . import levels
 from .config import Config
 from .database import Database
-from .detection.templates import imwrite_unicode
-from .paths import captures_dir
 
 
 class Tracker:
     def __init__(self, db: Database, config: Config):
         self.db = db
         self.config = config
-        self.session_id: int | None = None
         self._lock = threading.RLock()
         self.listeners: list[Callable[[str, dict], None]] = []
-        self._last_heartbeat = 0.0
-        self._best_session_before = 0
 
     # ------------------------------------------------------------------ pub/sub
     def subscribe(self, fn: Callable[[str, dict], None]) -> None:
@@ -35,105 +28,106 @@ class Tracker:
         for fn in list(self.listeners):
             try:
                 fn(kind, payload or {})
-            except Exception:  # un abonné défaillant ne doit pas casser le comptage
+            except Exception:  # un abonné défaillant ne doit pas casser l'enregistrement
                 import traceback
 
                 traceback.print_exc()
 
-    # ------------------------------------------------------------------ sessions
-    def start_session(self) -> int:
-        with self._lock:
-            if self.session_id is None:
-                self._best_session_before = self.db.stats().best_session
-                self.session_id = self.db.start_session()
-                self._emit("session_started", {"session_id": self.session_id})
-            return self.session_id
-
-    def end_session(self) -> None:
-        with self._lock:
-            if self.session_id is not None:
-                sid = self.session_id
-                self.db.end_session(sid)
-                self.session_id = None
-                self._emit("session_ended", {"session_id": sid})
-
-    def heartbeat(self) -> None:
-        if self.session_id is not None and time.time() - self._last_heartbeat > 15:
-            self._last_heartbeat = time.time()
-            self.db.heartbeat(self.session_id)
-
-    def on_fortnite(self, running: bool) -> None:
-        if running:
-            self.start_session()
-        else:
-            self.end_session()
-        self._emit("fortnite", {"running": running})
-
-    # ------------------------------------------------------------------ events
+    # ------------------------------------------------------------------ réglages
     @property
     def thresholds(self) -> list[int]:
         return self.config.get("levels", "star_thresholds", [10, 25, 50, 100, 200])
 
-    def record_chest(self, confidence: float = 1.0, method: str = "auto") -> dict:
+    def token_matcher(self) -> Callable[[str], bool]:
+        t = self.config.section("token")
+        patterns = t.get("patterns", items_mod.DEFAULT_TOKEN_PATTERNS)
+        exact = t.get("items", [])
+        return lambda raw: items_mod.is_token(raw, patterns, exact)
+
+    # ------------------------------------------------------------------ parties
+    def record_match(self, res: dict, size: int | None = None, mtime: float | None = None,
+                     notify: bool = True) -> dict:
+        """Enregistre le résultat d'un replay et déclenche niveaux / records / jetons."""
+        size = res.get("_size", 0) if size is None else size
+        mtime = res.get("_mtime", 0.0) if mtime is None else mtime
         with self._lock:
-            if self.session_id is None:
-                self.start_session()
-            before = self.db.total_chests()
-            self.db.add_chest(self.session_id, confidence, method)
-            after = before + 1
-            stats = self.db.stats(self.session_id)
-            payload = {"total": after, "confidence": confidence, "method": method, "stats": stats}
-            self._emit("chest", payload)
+            before_total = self.db.total_chests()
+            best_before = self.db.stats().best_match
+            info = self.db.upsert_match(res, size, mtime)
+            after_total = self.db.total_chests()
 
-            for kind, st in levels.transitions(before, after, self.thresholds):
-                self.db.add_level_event(kind, st.level, st.stars, after)
-                self._emit(kind, {"level": st.level, "stars": st.stars, "total": after})
+            tokens = []
+            is_token = self.token_matcher()
+            for it in info["items"]:
+                if is_token(it.get("item", "")):
+                    tok = self.db.add_token(info["match_id"], it["item"], info["started_at"] + float(it.get("t", 0)))
+                    tokens.append({**tok, "item": it["item"]})
+                    break  # un seul jeton par partie suffit à marquer la découverte
 
-            # Nouveau record : la session en cours dépasse la meilleure session précédente
-            if self._best_session_before > 0 and stats.session_chests == self._best_session_before + 1:
-                self._emit("record", {"session_chests": stats.session_chests, "previous": self._best_session_before})
-            self.heartbeat()
+            payload = {**info, "ok": bool(res.get("ok")), "error": res.get("error"),
+                       "warnings": res.get("warnings") or [], "placement": res.get("placement"),
+                       "total": after_total, "tokens": tokens, "notify": notify}
+            self._emit("match", payload)
+            if not notify:
+                return payload
+
+            for kind, st in levels.transitions(before_total, after_total, self.thresholds):
+                self.db.add_level_event(kind, st.level, st.stars, after_total)
+                self._emit(kind, {"level": st.level, "stars": st.stars, "total": after_total})
+            if best_before > 0 and info["chests"] > best_before and not info["replaced"]:
+                self._emit("record", {"match_chests": info["chests"], "previous": best_before})
+            for tok in tokens if not info["replaced"] else []:
+                self._emit("token", {**tok, "stats": self.db.stats()})
             return payload
 
-    def record_token(self, confidence: float, frame=None, bbox=None) -> dict:
-        with self._lock:
-            if self.session_id is None:
-                self.start_session()
-            shot = None
-            if frame is not None:
-                import cv2
+    def import_results(self, results: list[dict]) -> int:
+        """Import en masse (anciens replays) : pas de notification pour chaque partie."""
+        before = self.db.total_chests()
+        for r in sorted(results, key=lambda r: r.get("started_utc") or ""):
+            self.record_match(r, notify=False)
+        after = self.db.total_chests()
+        for kind, st in levels.transitions(before, after, self.thresholds):
+            self.db.add_level_event(kind, st.level, st.stars, after)
+        self._emit("imported", {"count": len(results), "chests": after - before})
+        return after - before
 
-                img = frame.copy()
-                if bbox and bbox[2] > 0:
-                    x, y, w, h = bbox
-                    cv2.rectangle(img, (x - 4, y - 4), (x + w + 4, y + h + 4), (0, 215, 255), 3)
-                path = captures_dir() / f"jeton_{datetime.now():%Y%m%d_%H%M%S}.png"
-                if imwrite_unicode(path, img):
-                    shot = str(path)
-            info = self.db.add_token(self.session_id, confidence, shot)
-            payload = {**info, "confidence": confidence, "screenshot": shot, "stats": self.db.stats(self.session_id)}
-            self._emit("token", payload)
-            return payload
+    def mark_token_item(self, raw: str, on: bool) -> None:
+        """L'utilisateur désigne (ou retire) un objet comme étant le jeton pirate."""
+        exact = list(self.config.get("token", "items", []))
+        if on and raw not in exact:
+            exact.append(raw)
+        if not on and raw in exact:
+            exact.remove(raw)
+        self.config.set("token", "items", exact)
+        self.rebuild_tokens()
 
-    def undo_last_chest(self) -> bool:
+    def rebuild_tokens(self) -> None:
+        """Recalcule les découvertes de jetons à partir des objets enregistrés."""
+        is_token = self.token_matcher()
         with self._lock:
-            ok = self.db.remove_last_chest()
-            if ok:
-                self._emit("chest_removed", {"stats": self.db.stats(self.session_id)})
-            return ok
+            conn = self.db.conn
+            with self.db._lock:
+                conn.execute("DELETE FROM token_events")
+                conn.commit()
+            rows = conn.execute("SELECT match_id, ts, item FROM items ORDER BY ts").fetchall()
+            done = set()
+            for r in rows:
+                if r["match_id"] not in done and is_token(r["item"]):
+                    done.add(r["match_id"])
+                    self.db.add_token(r["match_id"], r["item"], r["ts"])
+        self._emit("tokens_rebuilt", {})
+
+    def delete_match(self, match_id: int) -> None:
+        self.db.delete_match(match_id)
+        self._emit("match_removed", {"match_id": match_id})
 
     def reset_all(self) -> None:
         with self._lock:
-            had = self.session_id is not None
-            self.session_id = None
             self.db.reset()
-            if had:
-                self.session_id = self.db.start_session()
-            self._best_session_before = 0
-            self._emit("reset", {"stats": self.db.stats(self.session_id)})
+            self._emit("reset", {})
 
     def stats(self):
-        return self.db.stats(self.session_id)
+        return self.db.stats()
 
     def level(self) -> levels.LevelState:
         return levels.compute_level(self.db.total_chests(), self.thresholds)

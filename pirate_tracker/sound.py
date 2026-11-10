@@ -47,7 +47,11 @@ BUILTIN = {
 }
 
 
+ALIASES = {"match": "chest"}  # fin de partie analysée = son « pièce »
+
+
 def builtin_path(name: str) -> Path:
+    name = ALIASES.get(name, name)
     d = data_dir() / "sounds"
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{name}.wav"

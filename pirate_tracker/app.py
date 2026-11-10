@@ -7,16 +7,15 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QLockFile, QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QFont
+from PySide6.QtCore import QLockFile, QObject, QTimer, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox, QSystemTrayIcon
 
 from . import APP_NAME
+from . import replays
 from .config import Config
 from .database import Database, auto_backup
-from .detection.templates import TemplateStore
-from .engine import DetectionEngine
-from .paths import backups_dir, data_dir, templates_dir
+from .paths import backups_dir, data_dir
 from .sound import SoundPlayer
 from .tracker import Tracker
 from .ui import icons
@@ -27,38 +26,37 @@ from .ui.overlay import OverlayWidget
 
 
 class Bridge(QObject):
-    """Transfère les évènements du thread de détection vers le thread de l'interface."""
-    chest = Signal(object)
-    token = Signal(object, object)
+    """Transfère les évènements du thread de surveillance vers le thread de l'interface."""
+    replay_result = Signal(object)
     status = Signal(object)
-    metrics = Signal(object)
-    fortnite = Signal(bool)
     tracker_event = Signal(str, object)
 
 
 class AppContext:
-    def __init__(self, app: QApplication, video: str | None = None):
+    def __init__(self, app: QApplication, start_watcher: bool = True):
         self.app = app
         self.quitting = False
         self.config = Config()
         self.db = Database()
         self.tracker = Tracker(self.db, self.config)
-        self.templates = TemplateStore(templates_dir())
         self.sound = SoundPlayer(self.config)
         self.bridge = Bridge()
-        self.engine = DetectionEngine(
-            self.config.section("detection"), self.templates,
-            on_chest=self.bridge.chest.emit, on_token=self.bridge.token.emit,
-            on_status=lambda s: self.bridge.status.emit(s), on_metrics=self.bridge.metrics.emit,
-            on_fortnite=self.bridge.fortnite.emit, video_source=video,
+
+        # Premier lancement : seules les parties jouées à partir de maintenant sont comptées
+        # automatiquement (les anciennes peuvent être importées depuis la page Replays).
+        if not self.config.get("replays", "count_since", 0):
+            self.config.set("replays", "count_since", time.time() - 3600)
+
+        self.watcher = replays.ReplayWatcher(
+            demos_dir=self.demos_dir,
+            is_processed=self.db.is_processed,
+            on_result=self.bridge.replay_result.emit,
+            on_status=lambda s: self.bridge.status.emit(s),
+            since=lambda: float(self.config.get("replays", "count_since", 0)),
         )
-        self.bridge.chest.connect(lambda ev: self.tracker.record_chest(ev.confidence, ev.method))
-        self.bridge.token.connect(lambda ev, frame: self.tracker.record_token(ev.confidence, frame, ev.bbox))
-        self.bridge.fortnite.connect(self.tracker.on_fortnite)
+        self.watcher.enabled = bool(self.config.get("replays", "enabled", True))
+        self.bridge.replay_result.connect(self._on_replay_result)
         self.bridge.status.connect(self._on_status)
-        self.bridge.metrics.connect(self._on_metrics)
-        # Les évènements du tracker sont émis dans le thread courant (UI) : on passe par un signal
-        # pour rester sûr même si un appel provient d'un autre thread.
         self.tracker.subscribe(lambda k, p: self.bridge.tracker_event.emit(k, p))
         self.bridge.tracker_event.connect(self._on_tracker_event)
 
@@ -70,16 +68,24 @@ class AppContext:
         self.window = MainWindow(self)
         self._setup_tray()
 
-        if not self.config.get("detection", "only_when_fortnite_running", True) and not video:
-            self.tracker.start_session()
-
-        self._timer = QTimer(interval=1000, timeout=self._tick)
-        self._timer.start()
         self._backup_timer = QTimer(interval=30 * 60 * 1000, timeout=lambda: auto_backup(self.db))
         self._backup_timer.start()
         self.refresh_all(animate=False)
         self.apply_overlay()
-        self.engine.start()
+        if start_watcher:
+            self.watcher.start()
+
+    # ------------------------------------------------------------------ replays
+    @staticmethod
+    def default_demos_dir() -> Path:
+        return replays.default_demos_dir()
+
+    def demos_dir(self) -> Path:
+        custom = self.config.get("replays", "demos_dir", "")
+        return Path(custom) if custom else replays.default_demos_dir()
+
+    def _on_replay_result(self, res: dict):
+        self.tracker.record_match(res)
 
     # ------------------------------------------------------------------ tray
     def _setup_tray(self):
@@ -91,10 +97,7 @@ class AppContext:
         self.act_overlay.setChecked(self.config.get("overlay", "visible", True))
         self.act_overlay.toggled.connect(lambda v: (self.config.set("overlay", "visible", v), self.apply_overlay()))
         m.addAction(self.act_overlay)
-        self.act_det = QAction("Détection active", m, checkable=True)
-        self.act_det.setChecked(self.config.get("detection", "enabled", True))
-        self.act_det.toggled.connect(lambda v: self.config.set("detection", "enabled", v))
-        m.addAction(self.act_det)
+        m.addAction("Analyser les replays maintenant", self.watcher.poke)
         m.addSeparator()
         m.addAction("Quitter", self.quit)
         self.tray.setContextMenu(m)
@@ -104,7 +107,7 @@ class AppContext:
 
     def tray_message(self, title: str, body: str):
         if self.tray.isVisible() and self.config.get("notifications", "enabled", True):
-            self.tray.showMessage(title, body, icons.app_icon(), 3000)
+            self.tray.showMessage(title, body, icons.app_icon(), 4000)
 
     # ------------------------------------------------------------------ ui helpers
     def show_window(self):
@@ -136,7 +139,8 @@ class AppContext:
     def refresh_all(self, animate: bool = True):
         s = self.tracker.stats()
         st = self.tracker.level()
-        self.overlay.set_values(s.total_chests, s.total_tokens, st.level, st.stars, s.since_last_token, st.star_progress)
+        self.overlay.set_values(s.total_chests, s.last_match_chests, s.total_tokens, st.level, st.stars,
+                                s.since_last_token, st.star_progress)
         page = self.window.stack.currentWidget()
         for key, pg in self.window.pages.items():
             if pg is page and hasattr(pg, "refresh"):
@@ -146,19 +150,22 @@ class AppContext:
     def _on_status(self, status):
         self.overlay.set_status(status.level)
         self.window.pages["dashboard"].set_status(status.level, status.message)
-        self.window.pages["detection"].set_status(status)
+        self.window.pages["replays"].set_status(status)
         self.tray.setToolTip(f"{APP_NAME} — {status.message}")
-
-    def _on_metrics(self, m):
-        self.window.pages["detection"].on_metrics(m)
+        if self.window.stack.currentWidget() is self.window.pages["replays"]:
+            self.window.pages["replays"].refresh()
 
     def _on_tracker_event(self, kind: str, p: dict):
         n = self.config.section("notifications")
-        if kind == "chest":
-            self.window.pages["detection"].on_chest()
-            self.sound.play("chest")
-            if n.get("on_chest", True):
-                self.toast("chest", f"Coffre n°{p['total']} !", "Compté automatiquement", 1.8)
+        if kind == "match" and p.get("notify"):
+            if not p.get("ok"):
+                self.toast("eye", "Replay illisible", (p.get("error") or "")[:60], 4.0)
+            elif n.get("on_match", True):
+                c = p["chests"]
+                title = f"+{c} coffre{'s' if c > 1 else ''} cette partie" if c else "Aucun coffre cette partie"
+                self.sound.play("match")
+                self.toast("chest_open", title, f"Total : {p['total']} coffres", 4.0)
+                self.tray_message("Partie analysée", f"{title} — total : {p['total']} coffres")
         elif kind in ("star", "level"):
             self.sound.play("level")
             if n.get("on_level", True):
@@ -169,26 +176,15 @@ class AppContext:
         elif kind == "record":
             self.sound.play("record")
             if n.get("on_record", True):
-                self.toast("trophy", "Nouveau record !", f"{p['session_chests']} coffres dans cette session", 3.5)
+                self.toast("trophy", "Nouveau record !", f"{p['match_chests']} coffres en une partie", 3.5)
         elif kind == "token":
             self.sound.play("token")
             if n.get("on_token", True):
                 self.celebration.play(p["chests_since_previous"], p["stats"].total_tokens)
-                self.tray_message("JETON PIRATE TROUVÉ !",
-                                  f"Après {p['chests_since_previous']} coffres. Capture enregistrée.")
-        if kind in ("chest", "token", "star", "level", "record", "reset", "chest_removed", "session_started",
-                    "session_ended"):
-            self.refresh_all(animate=kind != "reset")
-
-    def _tick(self):
-        self.tracker.heartbeat()
-        page = self.window.stack.currentWidget()
-        if self.window.isVisible() and page is self.window.pages["dashboard"] and self.tracker.session_id:
-            s = self.tracker.stats()
-            from .ui.widgets import fmt_duration
-
-            page.cards["session"].set(str(s.session_chests), fmt_duration(s.session_seconds))
-            page.cards["time"].set(fmt_duration(s.tracked_seconds))
+                self.tray_message("JETON PIRATE TROUVÉ !", f"Après {p['chests_since_previous']} coffres.")
+        elif kind == "imported":
+            self.toast("list", "Import terminé", f"{p['count']} partie(s) · +{p['chests']} coffres", 3.5)
+        self.refresh_all(animate=kind not in ("reset", "imported", "tokens_rebuilt"))
 
     # ------------------------------------------------------------------ data actions
     def _ask_save(self, title, default_name, flt):
@@ -224,15 +220,11 @@ class AppContext:
                                 "Remplacer les statistiques actuelles par cette sauvegarde ?") != QMessageBox.Yes:
             return
         auto_backup(self.db)
-        sid = self.tracker.session_id
         try:
             self.db.restore(Path(p))
         except Exception as e:  # noqa: BLE001
             QMessageBox.warning(self.window, "Restauration impossible", str(e))
             return
-        self.tracker.session_id = None
-        if sid is not None:
-            self.tracker.start_session()
         self.refresh_all(animate=False)
 
     def reset_stats(self):
@@ -275,8 +267,7 @@ class AppContext:
     # ------------------------------------------------------------------ quit
     def quit(self):
         self.quitting = True
-        self.engine.stop()
-        self.tracker.end_session()
+        self.watcher.stop()
         try:
             auto_backup(self.db)
         except Exception:
@@ -290,7 +281,6 @@ class AppContext:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=APP_NAME)
     parser.add_argument("--minimized", action="store_true", help="démarrer réduit (widget seul)")
-    parser.add_argument("--video", help="analyser une vidéo à la place de l'écran (démonstration / validation)")
     args = parser.parse_args(argv)
 
     if sys.platform == "win32":
@@ -315,7 +305,7 @@ def main(argv=None):
         QMessageBox.information(None, APP_NAME, "Pirate Tracker est déjà lancé (voir l'icône près de l'horloge).")
         return 0
 
-    ctx = AppContext(app, video=args.video)
+    ctx = AppContext(app)
     if not args.minimized:
         ctx.window.show()
     app.aboutToQuit.connect(lambda: None if ctx.quitting else ctx.quit())

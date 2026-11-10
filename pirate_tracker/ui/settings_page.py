@@ -6,9 +6,8 @@ import sys
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
-                               QMessageBox, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget)
+                               QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget)
 
-from ..capture import available_backends
 from ..paths import data_dir
 from .pages import scroll_page
 from .widgets import h1, muted
@@ -32,66 +31,25 @@ class SettingsPage(QWidget):
         lay.setSpacing(10)
         lay.addWidget(h1("PARAMÈTRES"))
 
-        # --- Détection
-        g = QGroupBox("Détection")
+        # --- Replays
+        g = QGroupBox("Analyse des replays")
         f = QFormLayout(g)
         f.setLabelAlignment(Qt.AlignLeft)
         f.setVerticalSpacing(12)
-        d = cfg.section("detection")
-        self.det_enabled = self._check(d.get("enabled", True), lambda v: self._set_det("enabled", v))
-        f.addRow("Détection automatique", self.det_enabled)
-        self.only_fn = self._check(d.get("only_when_fortnite_running", True),
-                                   lambda v: self._set_det("only_when_fortnite_running", v))
-        f.addRow("Uniquement quand Fortnite est lancé", self.only_fn)
-        self.backend = QComboBox()
-        names = {"auto": "Automatique (recommandé)", "dxcam": "DXGI Desktop Duplication (rapide)",
-                 "mss": "GDI (compatible)"}
-        for key in ["auto"] + available_backends():
-            self.backend.addItem(names.get(key, key), key)
-        self.backend.setCurrentIndex(max(0, self.backend.findData(d.get("capture_backend", "auto"))))
-        self.backend.currentIndexChanged.connect(lambda _: self._set_det("capture_backend", self.backend.currentData(), True))
-        f.addRow("Mode de capture", self.backend)
-        self.monitor = QSpinBox()
-        self.monitor.setRange(1, 6)
-        self.monitor.setValue(int(d.get("monitor", 1)))
-        self.monitor.valueChanged.connect(lambda v: self._set_det("monitor", v, True))
-        f.addRow("Écran du jeu (n°)", self.monitor)
-        self.mode = QComboBox()
-        self.mode.addItem("Invite « Fouiller » + éclat (fiable, calibrage requis)", "prompt+burst")
-        self.mode.addItem("Éclat seul (sans calibrage, moins fiable)", "burst")
-        self.mode.setCurrentIndex(max(0, self.mode.findData(d.get("chest_mode", "prompt+burst"))))
-        self.mode.currentIndexChanged.connect(lambda _: self._set_det("chest_mode", self.mode.currentData(), True))
-        f.addRow("Méthode de détection des coffres", self.mode)
-        self.fps = QSpinBox()
-        self.fps.setRange(5, 30)
-        self.fps.setValue(int(d.get("fps", 15)))
-        self.fps.setSuffix(" images/s")
-        self.fps.valueChanged.connect(lambda v: self._set_det("fps", v))
-        f.addRow("Fréquence d'analyse", self.fps)
-        self.sens = _slider(50, 200, int(float(d.get("burst_sensitivity", 1.0)) * 100))
-        self.sens_lbl = QLabel()
-        self.sens.valueChanged.connect(self._sens_changed)
+        r = cfg.section("replays")
+        f.addRow("Analyser automatiquement chaque partie",
+                 self._check(r.get("enabled", True), lambda v: self._set_replays("enabled", v)))
+        self.dir_lbl = muted(r.get("demos_dir") or f"Par défaut ({ctx.default_demos_dir()})", wrap=True)
         row = QHBoxLayout()
-        row.addWidget(self.sens, 1)
-        row.addWidget(self.sens_lbl)
-        f.addRow("Sensibilité de l'éclat", row)
-        self.pthr = _slider(55, 95, int(float(d.get("prompt_threshold", 0.72)) * 100))
-        self.pthr_lbl = QLabel()
-        self.pthr.valueChanged.connect(self._pthr_changed)
-        row = QHBoxLayout()
-        row.addWidget(self.pthr, 1)
-        row.addWidget(self.pthr_lbl)
-        f.addRow("Seuil de reconnaissance de l'invite", row)
-        self.cool = QSpinBox()
-        self.cool.setRange(1, 10)
-        self.cool.setValue(int(round(float(d.get("cooldown_s", 2.5)))))
-        self.cool.setSuffix(" s")
-        self.cool.valueChanged.connect(lambda v: self._set_det("cooldown_s", float(v), True))
-        f.addRow("Délai anti double-comptage", self.cool)
-        self.tok = self._check(d.get("token_enabled", True), lambda v: self._set_det("token_enabled", v))
-        f.addRow("Détection du jeton pirate", self.tok)
-        self._sens_changed(self.sens.value(), save=False)
-        self._pthr_changed(self.pthr.value(), save=False)
+        row.addWidget(self.dir_lbl, 1)
+        b = QPushButton("Changer…")
+        b.clicked.connect(self._choose_dir)
+        row.addWidget(b)
+        b = QPushButton("Par défaut")
+        b.clicked.connect(lambda: (self._set_replays("demos_dir", ""),
+                                   self.dir_lbl.setText(f"Par défaut ({ctx.default_demos_dir()})")))
+        row.addWidget(b)
+        f.addRow("Dossier des replays", row)
         lay.addWidget(g)
 
         # --- Widget
@@ -120,6 +78,8 @@ class SettingsPage(QWidget):
         row.addWidget(self.op, 1)
         row.addWidget(self.op_lbl)
         f.addRow("Opacité", row)
+        f.addRow("Afficher « dernière partie »",
+                 self._check(o.get("show_last_match", True), lambda v: self._set_ov("show_last_match", v)))
         f.addRow("Afficher le niveau", self._check(o.get("show_level", True), lambda v: self._set_ov("show_level", v)))
         f.addRow("Afficher « depuis le dernier jeton »",
                  self._check(o.get("show_since_token", True), lambda v: self._set_ov("show_since_token", v)))
@@ -139,7 +99,7 @@ class SettingsPage(QWidget):
         f.setVerticalSpacing(12)
         n = cfg.section("notifications")
         f.addRow("Notifications", self._check(n.get("enabled", True), lambda v: cfg.set("notifications", "enabled", v)))
-        for key, lbl in (("on_chest", "… à chaque coffre détecté"), ("on_token", "… quand un jeton est détecté"),
+        for key, lbl in (("on_match", "… à la fin de chaque partie analysée"), ("on_token", "… quand un jeton est trouvé"),
                          ("on_level", "… à chaque nouvelle étoile / niveau"), ("on_record", "… quand je bats mon record")):
             f.addRow(lbl, self._check(n.get(key, True), lambda v, k=key: cfg.set("notifications", k, v)))
         s = cfg.section("sound")
@@ -147,7 +107,7 @@ class SettingsPage(QWidget):
         self.vol = _slider(0, 100, int(float(s.get("volume", 0.7)) * 100))
         self.vol.valueChanged.connect(lambda v: cfg.set("sound", "volume", v / 100))
         f.addRow("Volume", self.vol)
-        for key, lbl in (("chest", "Son du coffre"), ("token", "Son du jeton"), ("level", "Son des étoiles / records")):
+        for key, lbl in (("match", "Son de fin de partie"), ("token", "Son du jeton"), ("level", "Son des étoiles / records")):
             f.addRow(lbl, self._sound_row(key))
         lay.addWidget(g)
 
@@ -184,24 +144,20 @@ class SettingsPage(QWidget):
         cb.toggled.connect(fn)
         return cb
 
-    def _set_det(self, key, value, reload=False):
-        self.ctx.config.set("detection", key, value)
-        if reload:
-            self.ctx.engine.reload()
+    def _set_replays(self, key, value):
+        self.ctx.config.set("replays", key, value)
+        self.ctx.watcher.enabled = bool(self.ctx.config.get("replays", "enabled", True))
+        self.ctx.watcher.poke()
+
+    def _choose_dir(self):
+        d = QFileDialog.getExistingDirectory(self, "Dossier des replays Fortnite", str(self.ctx.demos_dir()))
+        if d:
+            self._set_replays("demos_dir", d)
+            self.dir_lbl.setText(d)
 
     def _set_ov(self, key, value):
         self.ctx.config.set("overlay", key, value)
         self.ctx.apply_overlay()
-
-    def _sens_changed(self, v, save=True):
-        self.sens_lbl.setText(f"×{v / 100:.2f}")
-        if save:
-            self._set_det("burst_sensitivity", v / 100, True)
-
-    def _pthr_changed(self, v, save=True):
-        self.pthr_lbl.setText(f"{v / 100:.2f}")
-        if save:
-            self._set_det("prompt_threshold", v / 100, True)
 
     def _sound_row(self, key):
         w = QWidget()

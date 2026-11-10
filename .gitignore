@@ -7,3 +7,6 @@ dist/
 .venv/
 venv/
 *.egg-info/
+tests/data/*.replay
+replay_reader/**/bin/
+replay_reader/**/obj/

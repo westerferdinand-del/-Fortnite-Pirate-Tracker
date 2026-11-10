@@ -4,12 +4,18 @@ import os
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 
+# Lecteur de replays C# publié au préalable (voir .github/workflows/windows-build.yml)
+READER = os.path.join(ROOT, "build", "reader", "PirateReplayReader.exe")
+if not os.path.exists(READER):
+    raise SystemExit("PirateReplayReader.exe manquant : lancez d'abord dotnet publish (voir README)")
+
 a = Analysis(
     [os.path.join(ROOT, "pirate_tracker", "__main__.py")],
     pathex=[ROOT],
     datas=[(os.path.join(ROOT, "pirate_tracker", "assets"), os.path.join("pirate_tracker", "assets"))],
-    hiddenimports=["dxcam", "comtypes", "comtypes.stream", "PySide6.QtMultimedia"],
-    excludes=["tkinter", "matplotlib", "PySide6.QtWebEngineCore", "PySide6.QtQml", "PySide6.QtQuick",
+    binaries=[(READER, os.path.join("pirate_tracker", "bin"))],
+    hiddenimports=["PySide6.QtMultimedia"],
+    excludes=["tkinter", "matplotlib", "numpy", "cv2", "PySide6.QtWebEngineCore", "PySide6.QtQml", "PySide6.QtQuick",
               "PySide6.Qt3DCore", "PySide6.QtCharts", "PySide6.QtPdf"],
     noarchive=False,
 )
