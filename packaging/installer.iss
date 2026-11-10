@@ -18,6 +18,10 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
+; Mise à jour par-dessus une version installée : fermer l'application si elle tourne
+CloseApplications=force
+CloseApplicationsFilter=*.exe
+RestartApplications=no
 
 [Languages]
 Name: "french"; MessagesFile: "compiler:Languages\French.isl"
@@ -39,3 +43,21 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\PirateTracker.exe"; Description: "Lancer {#AppName}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+// Avant d'installer : arrête Pirate Tracker (souvent caché près de l'horloge) et son lecteur de
+// replays, sinon leurs fichiers sont verrouillés (« MoveFileEx a échoué ; code 5. Accès refusé »).
+procedure StopProcess(const Name: String);
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM ' + Name, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  StopProcess('PirateTracker.exe');
+  StopProcess('PirateReplayReader.exe');
+  Sleep(1000);
+  Result := '';
+end;
