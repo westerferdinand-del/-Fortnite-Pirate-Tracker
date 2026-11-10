@@ -81,6 +81,7 @@ DIAG_KEYS = ("reader_version", "branch", "owner_found", "pawns_seen", "owner_paw
 @dataclass
 class Stats:
     total_chests: int = 0
+    initial_chests: int = 0  # coffres ouverts avant Pirate Tracker (saisis par l'utilisateur)
     total_broken: int = 0
     total_special: int = 0
     total_tokens: int = 0
@@ -218,7 +219,7 @@ class Database:
     def add_token(self, match_id: int | None, item: str, ts: float | None = None) -> dict:
         with self._lock:
             ts = ts or time.time()
-            total = self._scalar("SELECT COUNT(*) FROM chest_events WHERE ts <= ?", (ts,))
+            total = self._scalar("SELECT COUNT(*) FROM chest_events WHERE ts <= ?", (ts,)) + self.initial_chests
             last = self.conn.execute("SELECT total_chests_at FROM token_events ORDER BY ts DESC LIMIT 1").fetchone()
             since = total - (last["total_chests_at"] if last else 0)
             cur = self.conn.execute(
@@ -243,14 +244,30 @@ class Database:
             row = self.conn.execute(sql, args).fetchone()
         return int(row[0] or 0) if row else 0
 
-    def total_chests(self) -> int:
+    @property
+    def initial_chests(self) -> int:
+        """Coffres ouverts avant l'installation, ajoutés au total (réglage utilisateur)."""
+        try:
+            return max(0, int(self.get_meta("initial_chests", "0") or 0))
+        except ValueError:
+            return 0
+
+    def set_initial_chests(self, n: int) -> None:
+        self.set_meta("initial_chests", str(max(0, int(n))))
+
+    def counted_chests(self) -> int:
+        """Coffres réellement comptés par Pirate Tracker (sans les coffres d'avant)."""
         return self._scalar("SELECT COUNT(*) FROM chest_events")
+
+    def total_chests(self) -> int:
+        return self.counted_chests() + self.initial_chests
 
     def stats(self, now: float | None = None) -> Stats:
         now = now or time.time()
         s = Stats()
         with self._lock:
             s.total_chests = self.total_chests()
+            s.initial_chests = self.initial_chests
             s.total_broken = self._scalar("SELECT COUNT(*) FROM chest_events WHERE how='cassé'")
             s.total_special = self._scalar("SELECT COUNT(*) FROM chest_events WHERE special=1")
             s.total_tokens = self._scalar("SELECT COUNT(*) FROM token_events")
@@ -334,9 +351,10 @@ class Database:
         if n == 0:
             return []
         step = max(1, n // max_points)
-        pts = [(rows[i]["ts"], i + 1) for i in range(0, n, step)]
-        if pts[-1][1] != n:
-            pts.append((rows[-1]["ts"], n))
+        base = self.initial_chests
+        pts = [(rows[i]["ts"], base + i + 1) for i in range(0, n, step)]
+        if pts[-1][1] != base + n:
+            pts.append((rows[-1]["ts"], base + n))
         return pts
 
     def tokens(self) -> list[sqlite3.Row]:
@@ -362,7 +380,7 @@ class Database:
         with self._lock:
             self.conn.executescript(
                 "DELETE FROM chest_events; DELETE FROM items; DELETE FROM token_events; DELETE FROM level_events;"
-                "DELETE FROM matches;"
+                "DELETE FROM matches; DELETE FROM meta WHERE key='initial_chests';"
             )
             self.conn.commit()
 

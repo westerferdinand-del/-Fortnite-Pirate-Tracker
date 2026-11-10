@@ -147,6 +147,26 @@ def test_suspicious_result_keeps_diagnostics(tracker):
     assert [p for k, p in got if k == "match"][0]["warnings"]
 
 
+def test_initial_chests_are_added_to_the_total(tracker):
+    """« J'étais à environ 2500 coffres avant l'application, et elle en a compté 20. »"""
+    got = []
+    tracker.subscribe(lambda k, p: got.append(k))
+    tracker.record_match(fake_result("a.replay", chests=20))
+    tracker.set_initial_chests(2500)
+    s = tracker.stats()
+    assert (s.total_chests, s.initial_chests, s.since_last_token) == (2520, 2500, 2520)
+    assert tracker.level().level == 2520 // 200 + 1
+    assert "star" not in got[got.index("initial_changed"):] and "level" not in got[got.index("initial_changed"):]
+    tracker.record_match(fake_result("b.replay", chests=3, items=["Athena_PirateToken"], started="2026-11-02T20:00:00"))
+    s = tracker.stats()
+    assert s.total_chests == 2523
+    assert tracker.db.tokens()[0]["chests_since_previous"] == 2522  # 2500 + 20 + 2 coffres avant le jeton
+    assert s.since_last_token == 1
+    assert tracker.db.cumulative_series()[-1][1] == 2523
+    tracker.set_initial_chests(0)
+    assert tracker.stats().total_chests == 23
+
+
 def test_delete_match(tracker):
     tracker.record_match(fake_result("a.replay", chests=2))
     tracker.delete_match(tracker.db.matches()[0].id)

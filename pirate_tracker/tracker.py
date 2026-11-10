@@ -117,6 +117,11 @@ class Tracker:
                     self.db.add_token(r["match_id"], r["item"], r["ts"])
         self._emit("tokens_rebuilt", {})
 
+    def set_initial_chests(self, n: int) -> None:
+        """Coffres ouverts avant l'installation : ajoutés au total, sans déclencher d'étoiles en rafale."""
+        self.db.set_initial_chests(n)
+        self._emit("initial_changed", {"total": self.db.total_chests()})
+
     def delete_match(self, match_id: int) -> None:
         self.db.delete_match(match_id)
         self._emit("match_removed", {"match_id": match_id})

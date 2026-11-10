@@ -183,7 +183,7 @@ class AppContext:
                 self.tray_message("JETON PIRATE TROUVÉ !", f"Après {p['chests_since_previous']} coffres.")
         elif kind == "imported":
             self.toast("list", "Import terminé", f"{p['count']} partie(s) · +{p['chests']} coffres", 3.5)
-        self.refresh_all(animate=kind not in ("reset", "imported", "tokens_rebuilt"))
+        self.refresh_all(animate=kind not in ("reset", "imported", "tokens_rebuilt", "initial_changed"))
 
     # ------------------------------------------------------------------ data actions
     def _ask_save(self, title, default_name, flt):

@@ -6,7 +6,7 @@ import sys
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
-                               QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget)
+                               QMessageBox, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget)
 
 from ..paths import data_dir
 from .pages import scroll_page
@@ -30,6 +30,26 @@ class SettingsPage(QWidget):
         lay.setContentsMargins(28, 24, 28, 28)
         lay.setSpacing(10)
         lay.addWidget(h1("PARAMÈTRES"))
+
+        # --- Compteur
+        g = QGroupBox("Compteur")
+        v = QVBoxLayout(g)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Coffres ouverts avant Pirate Tracker :"))
+        self.initial = QSpinBox()
+        self.initial.setRange(0, 1_000_000)
+        self.initial.setSingleStep(100)
+        self.initial.setValue(ctx.tracker.db.initial_chests)
+        row.addWidget(self.initial)
+        apply_btn = QPushButton("Appliquer")
+        apply_btn.setObjectName("primary")
+        apply_btn.clicked.connect(self._apply_initial)
+        row.addWidget(apply_btn)
+        row.addStretch(1)
+        v.addLayout(row)
+        v.addWidget(muted("Ce nombre est ajouté au total compté par l'application (widget, tableau de bord, "
+                          "niveaux, coffres depuis le dernier jeton)."))
+        lay.addWidget(g)
 
         # --- Replays
         g = QGroupBox("Analyse des replays")
@@ -138,6 +158,10 @@ class SettingsPage(QWidget):
         cb.setChecked(bool(value))
         cb.toggled.connect(fn)
         return cb
+
+    def _apply_initial(self):
+        self.ctx.tracker.set_initial_chests(self.initial.value())
+        self.ctx.toast("chest", "Total mis à jour", f"{self.ctx.tracker.db.total_chests()} coffres au total", 3.0)
 
     def _set_replays(self, key, value):
         self.ctx.config.set("replays", key, value)

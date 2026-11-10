@@ -109,9 +109,13 @@ class HeroCard(QWidget):
         col.addWidget(self.next_lbl)
         lay.addLayout(col, 1)
 
-    def set_values(self, total: int, st: levels.LevelState, animate=True, broken: int = 0, special: int = 0):
+    def set_values(self, total: int, st: levels.LevelState, animate=True, broken: int = 0, special: int = 0,
+                   initial: int = 0):
         self.big.setText(f"{total:03d}")
-        parts = [f"{total - broken} ouverts", f"{broken} cassés"]
+        counted = total - initial
+        parts = [f"{counted - broken} ouverts", f"{broken} cassés"]
+        if initial:
+            parts.append(f"+ {initial} avant Pirate Tracker")
         if special:
             parts.append(f"dont {special} coffre{'s' if special > 1 else ''} spécia{'ux' if special > 1 else 'l'}")
         self.detail.setText(" · ".join(parts))
@@ -199,7 +203,7 @@ class DashboardPage(QWidget):
         tr = self.ctx.tracker
         s = tr.stats()
         st = tr.level()
-        self.hero.set_values(s.total_chests, st, animate, s.total_broken, s.total_special)
+        self.hero.set_values(s.total_chests, st, animate, s.total_broken, s.total_special, s.initial_chests)
         if s.last_match_chests is None:
             self.cards["last"].set("—", "aucune partie analysée")
         else:
