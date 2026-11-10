@@ -40,7 +40,8 @@ class Tracker:
 
     def token_matcher(self) -> Callable[[str], bool]:
         t = self.config.section("token")
-        patterns = t.get("patterns", items_mod.DEFAULT_TOKEN_PATTERNS)
+        # Motifs par défaut toujours inclus (ils évoluent avec les saisons) + ceux de l'utilisateur
+        patterns = list(dict.fromkeys(items_mod.DEFAULT_TOKEN_PATTERNS + list(t.get("patterns", []))))
         exact = t.get("items", [])
         return lambda raw: items_mod.is_token(raw, patterns, exact)
 

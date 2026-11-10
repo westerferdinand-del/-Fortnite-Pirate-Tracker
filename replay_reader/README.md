@@ -38,6 +38,18 @@ de munitions, composants…) est lue automatiquement comme un coffre grâce à u
 `Tiered_Chest_Athena_FactionChest_Generic_Parent` sont prises en charge sans être déclarées
 (résultat identique). Les classes non standard rencontrées sont listées dans `special_chest_classes`.
 
+**Coffres qui se remplissent (saison Treasure Hunters, nov. 2026)** : un coffre peut être rouvert
+après s'être rempli. Chaque ouverture compte (et chacune est une chance d'obtenir l'accès à la
+Boutique Pirate). `SearchingPawn` n'étant transmis que lorsqu'il change, une réouverture par le même
+joueur n'est visible que par l'augmentation de `SearchAnimationCount` : chaque augmentation est une
+ouverture, attribuée au joueur transmis ou au dernier connu. Vérification : `--selftest` (11 scénarios
+simulés : réouverture par soi / par un autre, coffre déjà ouvert avant d'être visible, joueur transmis
+dans une mise à jour séparée, coffre cassé…), exécuté par les tests et la CI.
+
+**Types de coffres** : `category` = `standard`, `trésor` (chasse au trésor), `rare`, `enterré`,
+`faction`, `spécial`, d'après le nom de la classe. Seuls rare / enterré / faction / spécial sont
+marqués `special` : les coffres normaux d'une nouvelle saison ne le sont plus (bug corrigé en 2.1).
+
 Limite : les replays très anciens (2020, v11) ne contiennent pas `SearchingPawn` → aucun coffre
 compté, avec un avertissement.
 

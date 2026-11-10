@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .items import chest_category
 from .paths import data_dir
 
 SCHEMA = """
@@ -41,7 +42,8 @@ CREATE TABLE IF NOT EXISTS chest_events (
     t_in_match REAL,
     kind TEXT NOT NULL DEFAULT '',
     how TEXT NOT NULL DEFAULT 'ouvert',
-    special INTEGER NOT NULL DEFAULT 0
+    special INTEGER NOT NULL DEFAULT 0,
+    category TEXT NOT NULL DEFAULT 'standard'
 );
 CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -143,12 +145,30 @@ class Database:
         self._migrate_v1()
         self.conn.executescript(SCHEMA)
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(chest_events)")}
-        for col, ddl in (("how", "TEXT NOT NULL DEFAULT 'ouvert'"), ("special", "INTEGER NOT NULL DEFAULT 0")):
-            if col not in cols:  # bases créées avant l'ajout de « cassé / spécial »
+        for col, ddl in (("how", "TEXT NOT NULL DEFAULT 'ouvert'"), ("special", "INTEGER NOT NULL DEFAULT 0"),
+                         ("category", "TEXT NOT NULL DEFAULT 'standard'")):
+            if col not in cols:  # bases créées avant l'ajout de « cassé / spécial / catégorie »
                 self.conn.execute(f"ALTER TABLE chest_events ADD COLUMN {col} {ddl}")
+        self._recategorize_chests()
         if "diagnostics" not in {r[1] for r in self.conn.execute("PRAGMA table_info(matches)")}:
             self.conn.execute("ALTER TABLE matches ADD COLUMN diagnostics TEXT")
         self.conn.commit()
+
+    def _recategorize_chests(self) -> None:
+        """Corrige les coffres enregistrés par d'anciennes versions.
+
+        Avant la 2.1, tout coffre d'une classe autre que l'ancien coffre standard était marqué
+        « spécial », y compris les coffres normaux d'une nouvelle saison. On recalcule à partir
+        du nom de classe enregistré.
+        """
+        from .items import chest_category
+
+        if self.get_meta("chest_categories_v") == "2":
+            return
+        rows = self.conn.execute("SELECT id, kind FROM chest_events").fetchall()
+        updates = [(cat, 1 if special else 0, r["id"]) for r in rows for cat, special in [chest_category(r["kind"])]]
+        self.conn.executemany("UPDATE chest_events SET category=?, special=? WHERE id=?", updates)
+        self.conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('chest_categories_v', '2')")
 
     def _migrate_v1(self) -> None:
         """La version 1 (reconnaissance d'écran) utilisait d'autres tables : on les met de côté."""
@@ -198,9 +218,10 @@ class Database:
             )
             mid = int(cur.lastrowid)
             self.conn.executemany(
-                "INSERT INTO chest_events(match_id, ts, t_in_match, kind, how, special) VALUES (?,?,?,?,?,?)",
+                "INSERT INTO chest_events(match_id, ts, t_in_match, kind, how, special, category) VALUES (?,?,?,?,?,?,?)",
                 [(mid, started + float(c.get("t", 0)), float(c.get("t", 0)), c.get("kind", ""),
-                  "cassé" if c.get("how") == "cassé" else "ouvert", 1 if c.get("special") else 0) for c in chests],
+                  "cassé" if c.get("how") == "cassé" else "ouvert", 1 if chest_category(c.get("kind", ""))[1] else 0,
+                  chest_category(c.get("kind", ""))[0]) for c in chests],
             )
             self.conn.executemany(
                 "INSERT INTO items(match_id, ts, item, count) VALUES (?,?,?,?)",
@@ -209,6 +230,13 @@ class Database:
             self.conn.commit()
         return {"match_id": mid, "chests": len(chests), "delta": len(chests) - old_chests,
                 "items": items, "replaced": bool(old), "started_at": started}
+
+    def match_chest_types(self, match_id: int) -> list[tuple[str, int]]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT category, COUNT(*) c FROM chest_events WHERE match_id=? GROUP BY category ORDER BY c DESC",
+                (match_id,)).fetchall()
+        return [(r["category"], r["c"]) for r in rows]
 
     def delete_match(self, match_id: int) -> None:
         with self._lock:

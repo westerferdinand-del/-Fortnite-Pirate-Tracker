@@ -128,7 +128,7 @@ def test_broken_and_special_chests_are_counted_and_kept(tracker):
     r = fake_result("a.replay", chests=4)
     r["chests"][1]["how"] = "cassé"
     r["chests"][2]["special"] = True
-    r["chests"][2]["kind"] = "Tiered_Chest_Pirate_Special"
+    r["chests"][2]["kind"] = "Tiered_Chest_Rare_Pirate"  # coffre rare = spécial
     tracker.record_match(r)
     s = tracker.stats()
     assert (s.total_chests, s.total_broken, s.total_special) == (4, 1, 1)
@@ -165,6 +165,24 @@ def test_initial_chests_are_added_to_the_total(tracker):
     assert tracker.db.cumulative_series()[-1][1] == 2523
     tracker.set_initial_chests(0)
     assert tracker.stats().total_chests == 23
+
+
+def test_old_wrong_special_flags_are_fixed_on_startup(tmp_path):
+    """Bug v2.0 : les coffres normaux d'une nouvelle saison étaient marqués « spéciaux »."""
+    db = Database(tmp_path / "x.db")
+    tr = Tracker(db, Config(tmp_path / "s.json"))
+    r = fake_result("a.replay", chests=3)
+    r["chests"][0]["kind"] = "B_NewSeason_Chest"
+    r["chests"][1]["kind"] = "Tiered_Chest_Rare"
+    tr.record_match(r)
+    db.conn.execute("UPDATE chest_events SET special=1, category='standard'")  # état laissé par la v2.0
+    db.conn.execute("DELETE FROM meta WHERE key='chest_categories_v'")
+    db.conn.commit()
+    db.close()
+    db2 = Database(tmp_path / "x.db")
+    assert db2.stats().total_special == 1  # seul le coffre rare reste spécial
+    assert dict(db2.match_chest_types(db2.matches()[0].id)) == {"standard": 2, "rare": 1}
+    db2.close()
 
 
 def test_delete_match(tracker):

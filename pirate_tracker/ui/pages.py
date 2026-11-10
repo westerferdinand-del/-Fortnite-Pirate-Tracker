@@ -374,7 +374,11 @@ class MatchesPage(QWidget):
         self.dm["Ouverts"].set(fmt_int(m.chests - m.broken))
         self.dm["Cassés"].set(fmt_int(m.broken))
         self.dm["Spéciaux"].set(fmt_int(m.special))
-        notes = list(m.warnings) if m.warnings else []
+        types = self.ctx.tracker.db.match_chest_types(m.id)
+        notes = []
+        if types:
+            notes.append("Types : " + " · ".join(f"{items_mod.CHEST_CATEGORIES.get(cat, cat)} ×{n}" for cat, n in types))
+        notes += list(m.warnings) if m.warnings else []
         if not m.ok:
             notes.insert(0, f"Replay illisible : {m.error}")
         notes.append(f"Fichier : {Path(m.replay_path).name}")

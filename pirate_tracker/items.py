@@ -58,7 +58,36 @@ WEAPON_TYPES = [
 
 # Motifs par défaut du jeton pirate (nom interne inconnu à l'avance : l'utilisateur peut
 # aussi désigner l'objet exact dans la page « Récompenses »).
-DEFAULT_TOKEN_PATTERNS = [r"pirate.*(token|coin|doubloon|medal|jeton)", r"(token|coin|doubloon|medal|jeton).*pirate"]
+DEFAULT_TOKEN_PATTERNS = [
+    r"pirate.*(token|coin|doubloon|medal|jeton)", r"(token|coin|doubloon|medal|jeton).*pirate",
+    # Saison Treasure Hunters (nov. 2026) : accès à la Boutique Pirate, 1 chance sur 137 500 par coffre
+    r"pirate.?shop", r"shop.?access", r"piratestore",
+]
+
+# Catégories de coffres d'après le nom de leur classe (même règle que le lecteur C#)
+CHEST_CATEGORIES = {
+    "standard": "Coffre", "trésor": "Coffre de chasse au trésor", "rare": "Coffre rare",
+    "enterré": "Coffre enterré", "faction": "Coffre de faction", "spécial": "Coffre spécial",
+}
+
+
+def chest_category(kind: str) -> tuple[str, bool]:
+    """Catégorie d'un coffre et s'il est « spécial » (rare, enterré…), d'après sa classe.
+
+    Les coffres normaux de la saison (y compris ceux de chasse au trésor) ne sont pas spéciaux.
+    """
+    n = (kind or "").lower()
+    if "rare" in n:
+        return "rare", True
+    if "buried" in n:
+        return "enterré", True
+    if any(w in n for w in ("faction", "society", "oath")):
+        return "faction", True
+    if any(w in n for w in ("vault", "bunker", "mythic", "boss")):
+        return "spécial", True
+    if "treasure" in n:
+        return "trésor", False
+    return "standard", False
 
 
 @dataclass(frozen=True)
