@@ -20,7 +20,7 @@ class OverlayWidget(QWidget):
     open_dashboard = Signal()
     settings_changed = Signal()
 
-    BASE_W, ROW_H, HEAD_H = 300, 34, 30
+    BASE_W, BASE_H = 310, 64
 
     def __init__(self, config):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.NoDropShadowWindowHint)
@@ -28,10 +28,10 @@ class OverlayWidget(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setWindowTitle("Pirate Tracker — widget")
-        self.values = {"chests": 0, "last": None, "tokens": 0, "level": 1, "stars": 0, "since": 0, "progress": 0.0}
+        self.chests = 0
         self.status = "inactive"
         self._drag: QPoint | None = None
-        self._anim = {}  # nom -> heure de début
+        self._anim_t0: float | None = None
         self._timer = QTimer(self, interval=16, timeout=self._tick)
         self._pulse = QTimer(self, interval=200, timeout=self.update)  # voyant d'état
         self._pulse.start()
@@ -46,21 +46,9 @@ class OverlayWidget(QWidget):
     def scale(self) -> float:
         return SIZES.get(self.ocfg.get("size", "medium"), 1.0)
 
-    def _rows(self) -> list[str]:
-        rows = ["chests"]
-        if self.ocfg.get("show_last_match", True):
-            rows.append("last")
-        rows.append("tokens")
-        if self.ocfg.get("show_level", True):
-            rows.append("level")
-        if self.ocfg.get("show_since_token", True):
-            rows.append("since")
-        return rows
-
     def apply_settings(self) -> None:
         s = self.scale
-        h = self.HEAD_H + self.ROW_H * len(self._rows()) + 22
-        self.setFixedSize(int(self.BASE_W * s), int(h * s))
+        self.setFixedSize(int(self.BASE_W * s), int(self.BASE_H * s))
         self.setWindowOpacity(max(0.2, min(1.0, float(self.ocfg.get("opacity", 0.85)))))
         self.move_to_position()
         self.update()
@@ -87,41 +75,29 @@ class OverlayWidget(QWidget):
         self.move(int(x), int(y))
 
     # ------------------------------------------------------------------ data
-    def set_values(self, chests: int, last: int | None, tokens: int, level: int, stars: int, since: int,
-                   progress: float) -> None:
-        """Mis à jour à la fin de chaque partie (après analyse du replay)."""
-        prev = dict(self.values)
-        self.values = {"chests": chests, "last": last, "tokens": tokens, "level": level, "stars": stars,
-                       "since": since, "progress": progress}
-        if chests > prev["chests"]:
-            self.animate("chest")
-        if tokens > prev["tokens"]:
-            self.animate("token")
-        if level > prev["level"] or (level == prev["level"] and stars > prev["stars"]):
-            self.animate("star")
+    def set_chests(self, chests: int) -> None:
+        """Total de coffres ouverts, mis à jour à la fin de chaque partie (après analyse du replay)."""
+        if chests > self.chests:
+            self._anim_t0 = time.monotonic()
+            self._timer.start()
+        self.chests = chests
         self.update()
 
     def set_status(self, level: str) -> None:
         self.status = level
         self.update()
 
-    def animate(self, name: str) -> None:
-        self._anim[name] = time.monotonic()
-        if not self._timer.isActive():
-            self._timer.start()
-
-    def _phase(self, name: str, dur: float) -> float | None:
-        t0 = self._anim.get(name)
-        if t0 is None:
+    def _phase(self) -> float | None:
+        if self._anim_t0 is None:
             return None
-        x = (time.monotonic() - t0) / dur
+        x = (time.monotonic() - self._anim_t0) / 1.2
         if x >= 1:
-            self._anim.pop(name, None)
+            self._anim_t0 = None
             return None
         return x
 
     def _tick(self) -> None:
-        if not self._anim:
+        if self._anim_t0 is None:
             self._timer.stop()
         self.update()
 
@@ -132,93 +108,39 @@ class OverlayWidget(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.TextAntialiasing)
         r = QRectF(self.rect()).adjusted(2, 2, -2, -2)
-        radius = 14 * s
-
-        glow = 0.0
-        for name, dur in (("chest", 0.9), ("token", 3.0), ("star", 1.6)):
-            ph = self._phase(name, dur)
-            if ph is not None:
-                glow = max(glow, 1 - ph)
+        ph = self._phase()
+        glow = (1 - ph) if ph is not None else 0.0
+        pop = math.sin(math.pi * ph) if ph is not None else 0.0
 
         bg = QLinearGradient(r.topLeft(), r.bottomRight())
         bg.setColorAt(0, QColor(20, 12, 42, 235))
         bg.setColorAt(1, QColor(8, 10, 30, 235))
         p.setBrush(bg)
         border = QColor(T.GOLD) if glow > 0 else QColor(self.ocfg.get("accent", T.VIOLET))
-        border.setAlpha(int(140 + 115 * glow))
+        border.setAlpha(int(150 + 105 * glow))
         p.setPen(QPen(border, (1.5 + 2.5 * glow) * s))
-        p.drawRoundedRect(r, radius, radius)
+        p.drawRoundedRect(r, 14 * s, 14 * s)
 
-        # En-tête
-        head = QRectF(r.x() + 12 * s, r.y() + 6 * s, r.width() - 24 * s, self.HEAD_H * s - 6 * s)
-        icons.draw_token(p, QRectF(head.x(), head.y() + 2 * s, 18 * s, 18 * s))
-        p.setPen(QColor(T.GOLD))
-        f = T.display_font(int(9 * s))
-        f.setLetterSpacing(QFont.AbsoluteSpacing, 1.5 * s)
+        icon = 38 * s
+        icons.draw_chest(p, QRectF(r.x() + 12 * s, r.center().y() - icon / 2 - 2 * s, icon, icon), opened=glow > 0)
+
+        p.setPen(QColor(T.MUTED))
+        f = T.ui_font(int(8 * s), QFont.Bold)
+        f.setLetterSpacing(QFont.AbsoluteSpacing, 1.0 * s)
         p.setFont(f)
-        p.drawText(QRectF(head.x() + 24 * s, head.y(), head.width(), 22 * s), Qt.AlignVCenter | Qt.AlignLeft,
-                   "PIRATE TRACKER")
+        p.drawText(QRectF(r.x() + 60 * s, r.y(), r.width(), r.height()), Qt.AlignVCenter | Qt.AlignLeft,
+                   "COFFRES OUVERTS")
+
+        p.setFont(T.display_font(int((22 + 5 * pop) * s)))
+        p.setPen(QColor("#fff3b0") if pop > 0 else QColor(T.GOLD))
+        p.drawText(r.adjusted(0, 0, -26 * s, 0), Qt.AlignVCenter | Qt.AlignRight, f"{self.chests:03d}")
+
         dot = QColor(STATUS_COLORS.get(self.status, T.RED))
         pulse = 0.5 + 0.5 * math.sin(time.monotonic() * 4) if self.status == "active" else 1.0
-        p.setPen(Qt.NoPen)
         dot.setAlpha(int(120 + 135 * pulse))
-        p.setBrush(dot)
-        p.drawEllipse(QPointF(head.right() - 6 * s, head.y() + 11 * s), 5 * s, 5 * s)
-        p.setPen(QPen(T.c(T.BORDER), 1))
-        p.drawLine(QPointF(r.x() + 10 * s, r.y() + self.HEAD_H * s), QPointF(r.right() - 10 * s, r.y() + self.HEAD_H * s))
-
-        y = r.y() + self.HEAD_H * s + 2 * s
-        v = self.values
-        labels = {
-            "chests": ("chest", "COFFRES OUVERTS", f"{v['chests']:03d}"),
-            "last": ("chest_open", "DERNIÈRE PARTIE", "—" if v["last"] is None else f"+{v['last']}"),
-            "tokens": ("token", "JETONS TROUVÉS", f"{v['tokens']}"),
-            "level": ("star", "NIVEAU", f"{v['level']}"),
-            "since": ("flame", "DEPUIS LE DERNIER JETON", f"{v['since']:03d}"),
-        }
-        for key in self._rows():
-            ic, label, val = labels[key]
-            row = QRectF(r.x() + 12 * s, y, r.width() - 24 * s, self.ROW_H * s)
-            icons.DRAWERS[ic](p, QRectF(row.x(), row.y() + 6 * s, 22 * s, 22 * s))
-            p.setPen(QColor(T.MUTED))
-            p.setFont(T.ui_font(int(7.5 * s), QFont.DemiBold))
-            p.drawText(QRectF(row.x() + 30 * s, row.y(), row.width() * 0.62, row.height()),
-                       Qt.AlignVCenter | Qt.AlignLeft, label)
-            if key == "level":
-                for i in range(5):
-                    ph = self._phase("star", 1.6) if i == v["stars"] - 1 else None
-                    k = 1.0 + (0.6 * math.sin(math.pi * ph) if ph is not None else 0)
-                    sz = 11 * s * k
-                    cx = row.x() + 92 * s + i * 14 * s
-                    icons.draw_star(p, QRectF(cx - sz / 2 + 6 * s, row.center().y() - sz / 2, sz, sz),
-                                    i < v["stars"], glow=(1 - ph) if ph is not None else 0)
-            pop = 0.0
-            if key == "chests":
-                ph = self._phase("chest", 0.9)
-                pop = math.sin(math.pi * ph) if ph is not None else 0
-            if key == "tokens":
-                ph = self._phase("token", 3.0)
-                pop = abs(math.sin(math.pi * 3 * ph)) if ph is not None else 0
-            fv = T.display_font(int((14 + 4 * pop) * s))
-            p.setFont(fv)
-            if key == "last":
-                ph = self._phase("chest", 0.9)
-                pop = math.sin(math.pi * ph) if ph is not None else 0
-            p.setPen(QColor("#fff3b0") if pop > 0 else QColor(T.GOLD if key not in ("since", "last") else T.TEXT))
-            p.drawText(row, Qt.AlignVCenter | Qt.AlignRight, val)
-            y += self.ROW_H * s
-
-        # Barre de progression vers la prochaine étoile
-        bar = QRectF(r.x() + 12 * s, r.bottom() - 13 * s, r.width() - 24 * s, 5 * s)
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(40, 32, 72))
-        p.drawRoundedRect(bar, 2.5 * s, 2.5 * s)
-        fill = QRectF(bar.x(), bar.y(), bar.width() * max(0.0, min(1.0, v["progress"])), bar.height())
-        g = QLinearGradient(bar.topLeft(), bar.topRight())
-        g.setColorAt(0, QColor(T.VIOLET))
-        g.setColorAt(1, QColor(T.GOLD))
-        p.setBrush(g)
-        p.drawRoundedRect(fill, 2.5 * s, 2.5 * s)
+        p.setBrush(dot)
+        p.drawEllipse(QPointF(r.right() - 12 * s, r.center().y()), 4 * s, 4 * s)
         p.end()
 
     # ------------------------------------------------------------------ interaction

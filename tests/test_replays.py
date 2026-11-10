@@ -153,13 +153,12 @@ def test_ui_smoke(tmp_path, monkeypatch):
     try:
         ctx.bridge.replay_result.emit(fake_result("a.replay", chests=11, items=["WID_Assault_CoreAR_Athena_SR"]))
         app.processEvents()
-        v = ctx.overlay.values
-        assert (v["chests"], v["last"], v["stars"]) == (11, 11, 1)
+        assert ctx.overlay.chests == 11  # le widget n'affiche que le total de coffres
         ctx.bridge.replay_result.emit(fake_result("b.replay", chests=2, items=["Athena_PirateToken"],
                                                   started="2026-11-02T10:00:00"))
         app.processEvents()
-        v = ctx.overlay.values
-        assert (v["chests"], v["last"], v["tokens"], v["since"]) == (13, 2, 1, 0)
+        assert ctx.overlay.chests == 13
+        assert ctx.tracker.stats().since_last_token == 0  # le jeton reste détecté (célébration)
         for key in ctx.window.pages:
             ctx.window.show_page(key)
             app.processEvents()

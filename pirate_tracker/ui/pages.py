@@ -163,7 +163,7 @@ class DashboardPage(QWidget):
         grid.setSpacing(14)
         self.cards = {
             "last": StatCard("chest_open", "Coffres à la dernière partie", T.VIOLET),
-            "tokens": StatCard("token", "Jetons pirates trouvés", T.GOLD),
+            "avg": StatCard("chest", "Moyenne de coffres par partie", T.GOLD),
             "since": StatCard("flame", "Coffres depuis le dernier jeton", "#fb923c"),
             "today": StatCard("calendar", "Coffres aujourd'hui", T.BLUE),
             "record": StatCard("trophy", "Record (meilleure partie)", T.GOLD),
@@ -173,7 +173,7 @@ class DashboardPage(QWidget):
             grid.addWidget(c, i // 3, i % 3)
         lay.addLayout(grid)
 
-        self.line = LineChart("Progression : coffres cumulés (pièces = jetons trouvés)")
+        self.line = LineChart("Progression : coffres ouverts au total")
         lay.addWidget(self.line)
         charts = QHBoxLayout()
         charts.setSpacing(14)
@@ -199,16 +199,16 @@ class DashboardPage(QWidget):
             when = datetime.fromtimestamp(s.last_match_at).strftime("%d/%m %H:%M")
             place = f" · {s.last_match_placement}e" if s.last_match_placement else ""
             self.cards["last"].set(str(s.last_match_chests), f"{when}{place}")
-        self.cards["tokens"].set(str(s.total_tokens),
-                                 f"Meilleure chance : {s.fewest_chests_for_token} coffres" if s.fewest_chests_for_token else "")
+        avg = s.total_chests / s.matches_count if s.matches_count else 0
+        self.cards["avg"].set(f"{avg:.1f}".replace(".", ","), f"sur {s.matches_count} partie{'s' if s.matches_count > 1 else ''}")
         self.cards["since"].set(f"{s.since_last_token:03d}")
         self.cards["today"].set(str(s.today_chests), f"Meilleur jour : {s.best_day}")
-        self.cards["record"].set(str(s.best_match), f"{s.matches_count} partie{'s' if s.matches_count > 1 else ''}")
+        self.cards["record"].set(str(s.best_match), "coffres en une seule partie")
         self.cards["time"].set(fmt_duration(s.tracked_seconds))
         self.sub_lbl.setText("Mis à jour automatiquement à la fin de chaque partie, grâce aux replays de Fortnite")
 
         db = tr.db
-        self.line.set_data(db.cumulative_series(), [row["ts"] for row in db.tokens()])
+        self.line.set_data(db.cumulative_series())
         today = datetime.now().date()
         counts = dict(db.daily_counts(14))
         days = []
@@ -241,8 +241,7 @@ class HistoryPage(QWidget):
         lay.addWidget(muted("Chaque partie est ajoutée automatiquement quand Fortnite termine d'écrire son replay. "
                             "Sélectionnez une partie pour voir les objets obtenus."))
 
-        self.table = make_table(["Date", "Durée", "Mode", "Classement", "Élim.", "Coffres", "Jetons", "Analyse"],
-                                stretch=2)
+        self.table = make_table(["Date", "Durée", "Mode", "Classement", "Élim.", "Coffres", "Analyse"], stretch=2)
         self.table.itemSelectionChanged.connect(self._show_items)
         lay.addWidget(carded(self.table), 3)
 
@@ -271,7 +270,6 @@ class HistoryPage(QWidget):
             self.table.setItem(i, 3, cell(place, color=T.GOLD if m.placement == 1 else None))
             self.table.setItem(i, 4, cell("—" if m.eliminations is None else m.eliminations))
             self.table.setItem(i, 5, cell(m.chests, color=T.GOLD, bold=True))
-            self.table.setItem(i, 6, cell(m.tokens, color=T.GOLD if m.tokens else None))
             if not m.ok:
                 status = cell("Échec", color=T.RED)
                 status.setToolTip(m.error or "")
@@ -280,7 +278,7 @@ class HistoryPage(QWidget):
                 status.setToolTip("\n".join(m.warnings))
             else:
                 status = cell("OK", color=T.GREEN)
-            self.table.setItem(i, 7, status)
+            self.table.setItem(i, 6, status)
         self._show_items()
 
     def _selected(self):
@@ -343,7 +341,6 @@ class RewardsPage(QWidget):
         self.cards = {
             "distinct": StatCard("list", "Objets différents obtenus", T.VIOLET),
             "legend": StatCard("star", "Objets légendaires / mythiques", T.GOLD),
-            "tokens": StatCard("token", "Jetons pirates", T.GOLD),
         }
         for c in self.cards.values():
             self.summary.addWidget(c)
@@ -388,7 +385,6 @@ class RewardsPage(QWidget):
                                   -x[0]["times"]))
         self.cards["distinct"].set(str(len(rows)))
         self.cards["legend"].set(str(legend))
-        self.cards["tokens"].set(str(tr.stats().total_tokens))
         self._raw = []
         self.table.setRowCount(len(shown))
         for i, (r, info) in enumerate(shown):

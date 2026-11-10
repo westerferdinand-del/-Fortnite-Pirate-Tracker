@@ -376,11 +376,11 @@ class Database:
         with open(dest, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f, delimiter=";")
             w.writerow(["partie", "date", "duree_min", "mode", "classement", "joueurs", "eliminations",
-                        "coffres", "jetons", "replay"])
+                        "coffres", "replay"])
             for r in rows:
                 w.writerow([r.id, datetime.fromtimestamp(r.started_at).strftime("%Y-%m-%d %H:%M:%S"),
                             round(r.duration / 60, 1), r.playlist or "", r.placement or "", r.total_players or "",
-                            r.eliminations if r.eliminations is not None else "", r.chests, r.tokens,
+                            r.eliminations if r.eliminations is not None else "", r.chests,
                             Path(r.replay_path).name])
         return Path(dest)
 

@@ -1,10 +1,10 @@
 # 🏴‍☠️ Pirate Tracker — compteur automatique de coffres Fortnite
 
 Pirate Tracker compte **tout seul** les coffres que vous ouvrez dans Fortnite, en lisant les
-**replays** que le jeu enregistre à la fin de chaque partie. Le total s'affiche dans un petit
-widget au-dessus du jeu et se met à jour **à la fin de chaque partie**. Une page complète montre
-vos statistiques : coffres de la dernière partie, total, historique, récompenses obtenues, jetons
-pirates trouvés.
+**replays** que le jeu enregistre à la fin de chaque partie. Le total de coffres ouverts s'affiche
+dans un petit widget au-dessus du jeu et se met à jour **à la fin de chaque partie**. Une page
+complète montre vos statistiques : coffres de la dernière partie, total, historique, récompenses
+obtenues.
 
 Aucun bouton à presser, aucune capture d'écran, aucune interaction avec le jeu.
 
@@ -68,7 +68,8 @@ Le nom interne exact de l'objet « jeton pirate » dans les fichiers du jeu n'é
 le développement. Il est reconnu automatiquement si son nom contient *pirate* avec *token / coin /
 doubloon / medal*. Sinon, ouvrez la page **Récompenses**, sélectionnez l'objet et cliquez sur
 **« C'est le jeton pirate »** : toutes vos parties sont recalculées. À chaque découverte : grande
-animation à l'écran, son, notification, et le nombre de coffres qu'il a fallu ouvrir.
+animation à l'écran, son, notification, et le nombre de coffres qu'il a fallu ouvrir. Le nombre
+de jetons trouvés n'est volontairement pas affiché.
 
 ---
 
@@ -106,15 +107,17 @@ partie, il ne fait que regarder si un nouveau fichier est apparu dans le dossier
 
 ## Pages
 
-- **Tableau de bord** : total, dernière partie, jetons, coffres depuis le dernier jeton,
-  aujourd'hui, record, temps de jeu analysé, graphiques.
-- **Historique** : toutes les parties (date, durée, mode, classement, éliminations, coffres,
-  jetons), avec les objets obtenus dans chacune.
+- **Widget en jeu** : uniquement le total de coffres ouverts (taille, position et opacité
+  réglables ; clic droit pour le menu, double-clic pour le tableau de bord).
+- **Tableau de bord** : total, dernière partie, moyenne par partie, coffres depuis le dernier
+  jeton, aujourd'hui, record, temps de jeu analysé, graphiques.
+- **Historique** : toutes les parties (date, durée, mode, classement, éliminations, coffres),
+  avec les objets obtenus dans chacune.
 - **Récompenses** : tout ce que vous avez obtenu (armes par rareté, soins, objets…), combien de
   fois, depuis quand. C'est aussi ici que l'on désigne le jeton pirate.
 - **Étoiles & niveaux** : 5 étoiles par niveau, paliers personnalisables, historique.
 - **Replays** : état de l'analyse, aide à l'activation, import des anciennes parties.
-- **Paramètres** : widget (taille, position, opacité, lignes affichées), notifications, sons,
+- **Paramètres** : widget (taille, position, opacité), notifications, sons,
   sauvegarde/export/restauration, réinitialisation, lancement au démarrage de Windows.
 
 | | |

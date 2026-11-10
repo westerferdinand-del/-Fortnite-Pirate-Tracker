@@ -137,10 +137,7 @@ class AppContext:
             self.toast_w.notify(icon, title, body, duration)
 
     def refresh_all(self, animate: bool = True):
-        s = self.tracker.stats()
-        st = self.tracker.level()
-        self.overlay.set_values(s.total_chests, s.last_match_chests, s.total_tokens, st.level, st.stars,
-                                s.since_last_token, st.star_progress)
+        self.overlay.set_chests(self.tracker.db.total_chests())
         page = self.window.stack.currentWidget()
         for key, pg in self.window.pages.items():
             if pg is page and hasattr(pg, "refresh"):
@@ -180,7 +177,7 @@ class AppContext:
         elif kind == "token":
             self.sound.play("token")
             if n.get("on_token", True):
-                self.celebration.play(p["chests_since_previous"], p["stats"].total_tokens)
+                self.celebration.play(p["chests_since_previous"])
                 self.tray_message("JETON PIRATE TROUVÉ !", f"Après {p['chests_since_previous']} coffres.")
         elif kind == "imported":
             self.toast("list", "Import terminé", f"{p['count']} partie(s) · +{p['chests']} coffres", 3.5)

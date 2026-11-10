@@ -47,11 +47,11 @@ class TokenCelebration(QWidget):
         self._last = 0.0
         self.subtitle = ""
 
-    def play(self, chests_before: int, total_tokens: int) -> None:
+    def play(self, chests_before: int) -> None:
         g = QGuiApplication.primaryScreen().geometry()
         w, h = min(1100, int(g.width() * 0.7)), min(720, int(g.height() * 0.75))
         self.setGeometry(g.center().x() - w // 2, g.center().y() - h // 2, w, h)
-        self.subtitle = f"Trouvé après {chests_before} coffre{'s' if chests_before > 1 else ''} · Jeton n°{total_tokens}"
+        self.subtitle = f"Trouvé après {chests_before} coffre{'s' if chests_before > 1 else ''}"
         self._parts = [_Particle(self.width(), self.height()) for _ in range(70)]
         self._t0 = self._last = time.monotonic()
         self.show()

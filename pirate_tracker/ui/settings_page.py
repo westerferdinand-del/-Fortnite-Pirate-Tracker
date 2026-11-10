@@ -78,11 +78,6 @@ class SettingsPage(QWidget):
         row.addWidget(self.op, 1)
         row.addWidget(self.op_lbl)
         f.addRow("Opacité", row)
-        f.addRow("Afficher « dernière partie »",
-                 self._check(o.get("show_last_match", True), lambda v: self._set_ov("show_last_match", v)))
-        f.addRow("Afficher le niveau", self._check(o.get("show_level", True), lambda v: self._set_ov("show_level", v)))
-        f.addRow("Afficher « depuis le dernier jeton »",
-                 self._check(o.get("show_since_token", True), lambda v: self._set_ov("show_since_token", v)))
         self.accent = QComboBox()
         for hexv, lbl in (("#8b5cf6", "Violet"), ("#3b82f6", "Bleu"), ("#fbbf24", "Or"), ("#22d3ee", "Cyan")):
             self.accent.addItem(lbl, hexv)

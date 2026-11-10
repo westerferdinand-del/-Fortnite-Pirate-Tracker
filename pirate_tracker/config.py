@@ -29,9 +29,6 @@ DEFAULTS: dict[str, Any] = {
         "position": "top-center",  # top-left | top-center | top-right | bottom-left | bottom-right | custom
         "custom_pos": [100, 40],
         "opacity": 0.85,
-        "show_last_match": True,
-        "show_level": True,
-        "show_since_token": True,
         "accent": "#8b5cf6",
     },
     "notifications": {
