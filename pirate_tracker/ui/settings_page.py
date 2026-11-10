@@ -1,23 +1,57 @@
-"""Page Paramètres."""
+"""Réglages v2 : compteur, paliers, replays (état, dossier, import), widget, notifications, données."""
 from __future__ import annotations
 
 import sys
+import threading
+from datetime import datetime
+from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
-                               QMessageBox, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QMessageBox, QProgressBar, QPushButton, QSlider,
+                               QSpinBox, QVBoxLayout, QWidget)
 
+from .. import levels, replays
 from ..paths import data_dir
-from .pages import scroll_page
-from .widgets import h1, muted
+from . import theme as T
+from .pages import header, page_shell
+from .widgets import Card, SettingRow, StatusDot, Toggle, caps, faint, fmt_int, hline
 
 
-def _slider(lo, hi, val):
-    s = QSlider(Qt.Horizontal)
-    s.setRange(lo, hi)
-    s.setValue(val)
-    return s
+class _ImportWorker(QObject):
+    progress = Signal(int, int)
+    result = Signal(object)
+    done = Signal(str)
+
+    def __init__(self, paths: list[str]):
+        super().__init__()
+        self.paths = paths
+        self.stop = threading.Event()
+
+    def run(self):
+        err = ""
+        for i, p in enumerate(self.paths):
+            if self.stop.is_set():
+                break
+            try:
+                res = replays.read_replay(p)
+                st = Path(p).stat()
+                res["_size"], res["_mtime"] = st.st_size, st.st_mtime
+                self.result.emit(res)
+            except Exception as e:  # noqa: BLE001
+                err = str(e)
+            self.progress.emit(i + 1, len(self.paths))
+        self.done.emit(err)
+
+
+def _row(*widgets) -> QWidget:
+    w = QWidget()
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(8)
+    for x in widgets:
+        lay.addWidget(x)
+    return w
 
 
 class SettingsPage(QWidget):
@@ -25,191 +59,321 @@ class SettingsPage(QWidget):
         super().__init__(parent)
         self.ctx = ctx
         cfg = ctx.config
-        inner = QWidget()
-        lay = QVBoxLayout(inner)
-        lay.setContentsMargins(28, 24, 28, 28)
-        lay.setSpacing(10)
-        lay.addWidget(h1("PARAMÈTRES"))
+        body = QWidget()
+        self.lay = QVBoxLayout(body)
+        self.lay.setContentsMargins(0, 0, 0, 0)
+        self.lay.setSpacing(16)
 
-        # --- Compteur
-        g = QGroupBox("Compteur")
-        v = QVBoxLayout(g)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Coffres ouverts avant Pirate Tracker :"))
+        # ---------------------------------------------------- compteur
+        card = self._card("Compteur")
         self.initial = QSpinBox()
         self.initial.setRange(0, 1_000_000)
         self.initial.setSingleStep(100)
+        self.initial.setGroupSeparatorShown(True)
+        self.initial.setFixedWidth(130)
+        self.initial.setAlignment(Qt.AlignRight)
         self.initial.setValue(ctx.tracker.db.initial_chests)
-        row.addWidget(self.initial)
         apply_btn = QPushButton("Appliquer")
-        apply_btn.setObjectName("primary")
         apply_btn.clicked.connect(self._apply_initial)
-        row.addWidget(apply_btn)
-        row.addStretch(1)
-        v.addLayout(row)
-        v.addWidget(muted("Ce nombre est ajouté au total compté par l'application (widget, tableau de bord, "
-                          "niveaux, coffres depuis le dernier jeton)."))
-        lay.addWidget(g)
+        self._add(card, SettingRow("Coffres ouverts avant Pirate Tracker",
+                                   "Ajoutés au total affiché partout (widget, vue d'ensemble, niveaux).",
+                                   _row(self.initial, apply_btn)))
+        self.spins = []
+        th = QWidget()
+        tl = QHBoxLayout(th)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(6)
+        for v in ctx.tracker.thresholds:
+            sp = QSpinBox()
+            sp.setRange(1, 100000)
+            sp.setValue(int(v))
+            sp.setFixedWidth(64)
+            sp.setAlignment(Qt.AlignRight)
+            tl.addWidget(sp)
+            self.spins.append(sp)
+        save = QPushButton("Enregistrer")
+        save.clicked.connect(self._save_thresholds)
+        tl.addWidget(save)
+        self._add(card, SettingRow("Paliers d'un niveau",
+                                   "Coffres nécessaires (depuis le début du niveau) pour chacun des 5 paliers.", th),
+                  last=True)
 
-        # --- Replays
-        g = QGroupBox("Analyse des replays")
-        f = QFormLayout(g)
-        f.setLabelAlignment(Qt.AlignLeft)
-        f.setVerticalSpacing(12)
-        r = cfg.section("replays")
-        f.addRow("Analyser automatiquement chaque partie",
-                 self._check(r.get("enabled", True), lambda v: self._set_replays("enabled", v)))
-        self.dir_lbl = muted(r.get("demos_dir") or f"Par défaut ({ctx.default_demos_dir()})", wrap=True)
-        row = QHBoxLayout()
-        row.addWidget(self.dir_lbl, 1)
-        b = QPushButton("Changer…")
-        b.clicked.connect(self._choose_dir)
-        row.addWidget(b)
-        b = QPushButton("Par défaut")
-        b.clicked.connect(lambda: (self._set_replays("demos_dir", ""),
-                                   self.dir_lbl.setText(f"Par défaut ({ctx.default_demos_dir()})")))
-        row.addWidget(b)
-        f.addRow("Dossier des replays", row)
-        lay.addWidget(g)
+        # ---------------------------------------------------- replays
+        card = self._card("Replays")
+        self.status = StatusDot()
+        self.status_msg = faint("")
+        st = QWidget()
+        sl = QVBoxLayout(st)
+        sl.setContentsMargins(0, 12, 0, 12)
+        sl.setSpacing(4)
+        sl.addWidget(self.status)
+        sl.addWidget(self.status_msg)
+        card.lay.addWidget(st)
+        card.lay.addWidget(hline())
+        self.dir_lbl = faint("", wrap=False)
+        change = QPushButton("Changer")
+        change.setObjectName("ghost")
+        change.clicked.connect(self._choose_dir)
+        opendir = QPushButton("Ouvrir")
+        opendir.setObjectName("ghost")
+        opendir.clicked.connect(self._open_dir)
+        default = QPushButton("Par défaut")
+        default.setObjectName("ghost")
+        default.clicked.connect(lambda: self._set_replays("demos_dir", ""))
+        dir_row = SettingRow("Dossier des replays", "", _row(opendir, change, default))
+        dir_row.layout().itemAt(0).layout().addWidget(self.dir_lbl)
+        self._add(card, dir_row)
+        self.auto = Toggle(cfg.get("replays", "enabled", True))
+        self.auto.toggled.connect(lambda v: self._set_replays("enabled", v))
+        self._add(card, SettingRow("Analyse automatique", "Chaque partie est analysée dès que Fortnite a fini "
+                                                         "d'écrire son replay.", self.auto))
+        self.import_btn = QPushButton("Importer")
+        self.import_btn.clicked.connect(self._import_old)
+        self.file_btn = QPushButton("Choisir un fichier…")
+        self.file_btn.setObjectName("ghost")
+        self.file_btn.clicked.connect(self._import_file)
+        self.import_row = SettingRow("Anciennes parties", "", _row(self.file_btn, self.import_btn))
+        self.import_desc = faint("")
+        self.import_desc.setFont(T.font(12))
+        self.import_row.layout().itemAt(0).layout().addWidget(self.import_desc)
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.setVisible(False)
+        self.import_row.layout().itemAt(0).layout().addWidget(self.progress)
+        self._add(card, self.import_row)
+        help_lbl = faint("Indispensable : dans Fortnite, Réglages → Jeu → Replays → activez « Enregistrer les "
+                         "replays ». Fortnite efface ses vieux replays ; les parties déjà analysées restent ici.")
+        help_lbl.setFont(T.font(12))
+        hw = QWidget()
+        hwl = QVBoxLayout(hw)
+        hwl.setContentsMargins(0, 12, 0, 4)
+        hwl.addWidget(help_lbl)
+        card.lay.addWidget(hw)
 
-        # --- Widget
-        g = QGroupBox("Widget flottant")
-        f = QFormLayout(g)
-        f.setVerticalSpacing(12)
+        # ---------------------------------------------------- widget
+        card = self._card("Widget en jeu")
         o = cfg.section("overlay")
-        f.addRow("Afficher le widget", self._check(o.get("visible", True), lambda v: self._set_ov("visible", v)))
-        self.size = QComboBox()
-        for k, lbl in (("small", "Petit"), ("medium", "Moyen"), ("large", "Grand")):
-            self.size.addItem(lbl, k)
-        self.size.setCurrentIndex(max(0, self.size.findData(o.get("size", "medium"))))
-        self.size.currentIndexChanged.connect(lambda _: self._set_ov("size", self.size.currentData()))
-        f.addRow("Taille", self.size)
-        self.pos = QComboBox()
-        for k, lbl in (("top-left", "Haut gauche"), ("top-center", "Haut centre"), ("top-right", "Haut droite"),
-                       ("bottom-left", "Bas gauche"), ("bottom-right", "Bas droite"), ("custom", "Personnalisée (glisser)")):
-            self.pos.addItem(lbl, k)
-        self.pos.setCurrentIndex(max(0, self.pos.findData(o.get("position", "top-center"))))
-        self.pos.currentIndexChanged.connect(lambda _: self._set_ov("position", self.pos.currentData()))
-        f.addRow("Position", self.pos)
-        self.op = _slider(20, 100, int(float(o.get("opacity", 0.85)) * 100))
-        self.op_lbl = QLabel(f"{self.op.value()} %")
-        self.op.valueChanged.connect(lambda v: (self.op_lbl.setText(f"{v} %"), self._set_ov("opacity", v / 100)))
-        row = QHBoxLayout()
-        row.addWidget(self.op, 1)
-        row.addWidget(self.op_lbl)
-        f.addRow("Opacité", row)
-        self.accent = QComboBox()
-        for hexv, lbl in (("#8b5cf6", "Violet"), ("#3b82f6", "Bleu"), ("#fbbf24", "Or"), ("#22d3ee", "Cyan")):
-            self.accent.addItem(lbl, hexv)
-        self.accent.setCurrentIndex(max(0, self.accent.findData(o.get("accent", "#8b5cf6"))))
-        self.accent.currentIndexChanged.connect(lambda _: self._set_ov("accent", self.accent.currentData()))
-        f.addRow("Couleur de bordure", self.accent)
-        lay.addWidget(muted("Astuce : clic droit sur le widget pour changer taille/position, double-clic pour ouvrir "
-                            "le tableau de bord, glisser pour le déplacer."))
-        lay.addWidget(g)
+        vis = Toggle(o.get("visible", True))
+        vis.toggled.connect(lambda v: self._set_ov("visible", v))
+        self._add(card, SettingRow("Afficher le widget", "Total de coffres, toujours au premier plan. "
+                                                        "Glissez-le pour le déplacer.", vis))
+        self.size = self._combo([("small", "Petit"), ("medium", "Moyen"), ("large", "Grand")], o.get("size", "medium"),
+                                lambda k: self._set_ov("size", k))
+        self._add(card, SettingRow("Taille", "", self.size))
+        self.pos = self._combo([("top-left", "En haut à gauche"), ("top-center", "En haut au centre"),
+                                ("top-right", "En haut à droite"), ("bottom-left", "En bas à gauche"),
+                                ("bottom-right", "En bas à droite"), ("custom", "Position libre")],
+                               o.get("position", "top-center"), lambda k: self._set_ov("position", k))
+        self._add(card, SettingRow("Position", "", self.pos))
+        op = QSlider(Qt.Horizontal)
+        op.setRange(30, 100)
+        op.setValue(int(float(o.get("opacity", 0.9)) * 100))
+        op.setFixedWidth(180)
+        op_lbl = faint(f"{op.value()} %", wrap=False)
+        op_lbl.setFixedWidth(40)
+        op.valueChanged.connect(lambda v: (op_lbl.setText(f"{v} %"), self._set_ov("opacity", v / 100)))
+        self._add(card, SettingRow("Opacité", "", _row(op, op_lbl)), last=True)
 
-        # --- Notifications & sons
-        g = QGroupBox("Notifications et sons")
-        f = QFormLayout(g)
-        f.setVerticalSpacing(12)
+        # ---------------------------------------------------- notifications
+        card = self._card("Notifications et sons")
         n = cfg.section("notifications")
-        f.addRow("Notifications", self._check(n.get("enabled", True), lambda v: cfg.set("notifications", "enabled", v)))
-        for key, lbl in (("on_match", "… à la fin de chaque partie analysée"), ("on_token", "… quand un jeton est trouvé"),
-                         ("on_level", "… à chaque nouvelle étoile / niveau"), ("on_record", "… quand je bats mon record")):
-            f.addRow(lbl, self._check(n.get(key, True), lambda v, k=key: cfg.set("notifications", k, v)))
+        for key, ttl, desc in (("enabled", "Notifications", "Petites notifications discrètes au-dessus du jeu."),
+                               ("on_match", "Fin de partie", "« +12 coffres » quand une partie est analysée."),
+                               ("on_level", "Paliers et niveaux", ""), ("on_record", "Records", ""),
+                               ("on_token", "Jeton pirate", "Notification Windows quand le jeton est trouvé.")):
+            t = Toggle(n.get(key, True))
+            t.toggled.connect(lambda v, k=key: cfg.set("notifications", k, v))
+            self._add(card, SettingRow(ttl, desc, t))
         s = cfg.section("sound")
-        f.addRow("Sons", self._check(s.get("enabled", True), lambda v: cfg.set("sound", "enabled", v)))
-        self.vol = _slider(0, 100, int(float(s.get("volume", 0.7)) * 100))
-        self.vol.valueChanged.connect(lambda v: cfg.set("sound", "volume", v / 100))
-        f.addRow("Volume", self.vol)
-        for key, lbl in (("match", "Son de fin de partie"), ("token", "Son du jeton"), ("level", "Son des étoiles / records")):
-            f.addRow(lbl, self._sound_row(key))
-        lay.addWidget(g)
+        snd = Toggle(s.get("enabled", True))
+        snd.toggled.connect(lambda v: cfg.set("sound", "enabled", v))
+        self._add(card, SettingRow("Sons", "", snd))
+        vol = QSlider(Qt.Horizontal)
+        vol.setRange(0, 100)
+        vol.setValue(int(float(s.get("volume", 0.7)) * 100))
+        vol.setFixedWidth(180)
+        vol.valueChanged.connect(lambda v: cfg.set("sound", "volume", v / 100))
+        test = QPushButton("Tester")
+        test.setObjectName("ghost")
+        test.clicked.connect(lambda: ctx.sound.play("match"))
+        self._add(card, SettingRow("Volume", "", _row(vol, test)), last=True)
 
-        # --- Données
-        g = QGroupBox("Données et sauvegarde")
-        v = QVBoxLayout(g)
-        v.addWidget(muted(f"Vos statistiques sont enregistrées automatiquement dans : {data_dir()}"))
-        row = QHBoxLayout()
-        for text, fn in (("Sauvegarder…", ctx.backup), ("Restaurer une sauvegarde…", ctx.restore),
-                         ("Exporter CSV", ctx.export_csv), ("Exporter JSON", ctx.export_json),
+        # ---------------------------------------------------- données
+        card = self._card("Données")
+        btns = []
+        for text, fn in (("Sauvegarder", ctx.backup), ("Restaurer", ctx.restore), ("Exporter CSV", ctx.export_csv),
                          ("Ouvrir le dossier", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir()))))):
             b = QPushButton(text)
+            b.setObjectName("ghost")
             b.clicked.connect(fn)
-            row.addWidget(b)
-        row.addStretch(1)
-        v.addLayout(row)
+            btns.append(b)
+        self._add(card, SettingRow("Sauvegarde", "Sauvegarde automatique toutes les 30 minutes et à la fermeture.",
+                                   _row(*btns)))
         if sys.platform == "win32":
-            v.addWidget(self._check(ctx.autostart_enabled(), ctx.set_autostart, "Lancer au démarrage de Windows"))
-        reset = QPushButton("Réinitialiser toutes les statistiques…")
+            auto = Toggle(ctx.autostart_enabled())
+            auto.toggled.connect(ctx.set_autostart)
+            self._add(card, SettingRow("Lancer au démarrage de Windows", "Réduit, prêt à compter.", auto))
+        reset = QPushButton("Tout réinitialiser")
         reset.setObjectName("danger")
         reset.clicked.connect(self._reset)
-        v.addWidget(reset, 0, Qt.AlignLeft)
-        lay.addWidget(g)
-        lay.addStretch(1)
+        self._add(card, SettingRow("Réinitialiser", "Efface toutes les statistiques (une sauvegarde est faite avant).",
+                                   reset), last=True)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll_page(inner))
+        outer.addWidget(page_shell(header("Réglages"), body))
+        self._thread = None
+        self._old: list[str] = []
 
-    # ------------------------------------------------------------------ helpers
-    def _check(self, value, fn, text=""):
-        cb = QCheckBox(text)
-        cb.setChecked(bool(value))
-        cb.toggled.connect(fn)
+    # ---------------------------------------------------------------- construction
+    def _card(self, name: str) -> Card:
+        self.lay.addWidget(caps(name))
+        card = Card(padding=20)
+        card.lay.setSpacing(0)
+        card.layout().setContentsMargins(20, 6, 20, 6)
+        self.lay.addWidget(card)
+        return card
+
+    def _add(self, card: Card, row: QWidget, last: bool = False) -> None:
+        card.lay.addWidget(row)
+        if not last:
+            card.lay.addWidget(hline())
+
+    def _combo(self, items, current, on_change) -> QComboBox:
+        cb = QComboBox()
+        cb.setFixedWidth(200)
+        for k, lbl in items:
+            cb.addItem(lbl, k)
+        cb.setCurrentIndex(max(0, cb.findData(current)))
+        cb.currentIndexChanged.connect(lambda _: on_change(cb.currentData()))
         return cb
 
+    # ---------------------------------------------------------------- état / rafraîchissement
+    def set_status(self, status: replays.WatcherStatus):
+        self.status.set_status(status.level, status.message)
+        last = (f" · dernière analyse {datetime.fromtimestamp(status.last_analysis):%H:%M}"
+                if status.last_analysis else "")
+        self.status_msg.setText(status.message + last)
+
+    def refresh(self, *_):
+        ws = self.ctx.watcher.status
+        if not ws.message:
+            try:
+                replays.find_reader()
+                ws.reader_ok = True
+            except replays.ReaderNotFound:
+                ws.reader_ok = False
+            d = self.ctx.demos_dir()
+            ws.message = ("Lecteur de replays introuvable" if not ws.reader_ok else
+                          "Prêt : chaque partie sera analysée à sa fin" if d.is_dir() else
+                          "Dossier des replays introuvable : activez « Enregistrer les replays » dans Fortnite")
+            ws.level = "active" if ws.reader_ok and d.is_dir() else ("configuring" if ws.reader_ok else "inactive")
+        self.set_status(ws)
+        d = self.ctx.demos_dir()
+        self.dir_lbl.setText(str(d))
+        since = float(self.ctx.config.get("replays", "count_since", 0))
+        db = self.ctx.tracker.db
+        self._old = []
+        if d.is_dir():
+            for p in d.glob("*.replay"):
+                try:
+                    stt = p.stat()
+                except OSError:
+                    continue
+                if stt.st_mtime < since and not db.is_processed(str(p), stt.st_size, stt.st_mtime):
+                    self._old.append(str(p))
+        n = len(self._old)
+        self.import_desc.setText(f"{n} replay{'s' if n > 1 else ''} d'avant l'installation, pas encore compté"
+                                 f"{'s' if n > 1 else ''}." if n else "Aucun ancien replay à importer.")
+        self.import_btn.setEnabled(bool(n) and self._thread is None)
+        self.initial.blockSignals(True)
+        self.initial.setValue(db.initial_chests)
+        self.initial.blockSignals(False)
+        for sp, v in zip(self.spins, self.ctx.tracker.thresholds):
+            sp.setValue(int(v))
+
+    # ---------------------------------------------------------------- actions
     def _apply_initial(self):
         self.ctx.tracker.set_initial_chests(self.initial.value())
-        self.ctx.toast("chest", "Total mis à jour", f"{self.ctx.tracker.db.total_chests()} coffres au total", 3.0)
+        self.ctx.toast("Total mis à jour", f"{fmt_int(self.ctx.tracker.db.total_chests())} coffres au total")
+
+    def _save_thresholds(self):
+        vals = [sp.value() for sp in self.spins]
+        try:
+            levels.validate_thresholds(vals)
+        except ValueError as e:
+            QMessageBox.warning(self, "Paliers invalides", str(e))
+            return
+        self.ctx.config.set("levels", "star_thresholds", vals)
+        self.ctx.refresh_all(animate=False)
+        self.ctx.toast("Paliers enregistrés", "")
 
     def _set_replays(self, key, value):
         self.ctx.config.set("replays", key, value)
         self.ctx.watcher.enabled = bool(self.ctx.config.get("replays", "enabled", True))
         self.ctx.watcher.poke()
+        self.refresh()
 
     def _choose_dir(self):
         d = QFileDialog.getExistingDirectory(self, "Dossier des replays Fortnite", str(self.ctx.demos_dir()))
         if d:
             self._set_replays("demos_dir", d)
-            self.dir_lbl.setText(d)
+
+    def _open_dir(self):
+        d = self.ctx.demos_dir()
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(d if d.exists() else d.parent)))
 
     def _set_ov(self, key, value):
         self.ctx.config.set("overlay", key, value)
         self.ctx.apply_overlay()
 
-    def _sound_row(self, key):
-        w = QWidget()
-        h = QHBoxLayout(w)
-        h.setContentsMargins(0, 0, 0, 0)
-        cur = self.ctx.config.get("sound", f"{key}_sound", "")
-        lbl = muted(cur.split("/")[-1].split("\\")[-1] if cur else "Son intégré", wrap=False)
-        choose = QPushButton("Choisir…")
-        default = QPushButton("Par défaut")
-        test = QPushButton("▶ Tester")
+    def _import_old(self):
+        if self._old:
+            self._start_import(list(self._old))
 
-        def pick():
-            path, _ = QFileDialog.getOpenFileName(self, "Choisir un son (.wav)", "", "Sons WAV (*.wav)")
-            if path:
-                self.ctx.config.set("sound", f"{key}_sound", path)
-                lbl.setText(path.split("/")[-1])
+    def _import_file(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Choisir des replays", str(self.ctx.demos_dir()),
+                                                "Replays Fortnite (*.replay)")
+        if paths:
+            self._start_import(paths)
 
-        def reset():
-            self.ctx.config.set("sound", f"{key}_sound", "")
-            lbl.setText("Son intégré")
+    def _start_import(self, paths: list[str]):
+        if self._thread is not None:
+            return
+        self._results = []
+        self._worker = _ImportWorker(paths)
+        self._thread = QThread(self)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.result.connect(self._results.append)
+        self._worker.progress.connect(lambda i, n: (self.progress.setRange(0, n), self.progress.setValue(i)))
+        self._worker.done.connect(self._on_done)
+        self.progress.setVisible(True)
+        self.import_btn.setEnabled(False)
+        self.file_btn.setEnabled(False)
+        self.import_desc.setText(f"Analyse de {len(paths)} replay(s)… environ 2 s chacun.")
+        self._thread.start()
 
-        choose.clicked.connect(pick)
-        default.clicked.connect(reset)
-        test.clicked.connect(lambda: self.ctx.sound.play(key))
-        h.addWidget(lbl, 1)
-        for b in (choose, default, test):
-            h.addWidget(b)
-        return w
+    def _on_done(self, err: str):
+        self._thread.quit()
+        self._thread.wait()
+        self._thread = None
+        self.progress.setVisible(False)
+        self.file_btn.setEnabled(True)
+        ok = [r for r in self._results if r.get("ok")]
+        gained = self.ctx.tracker.import_results(self._results)
+        failed = len(self._results) - len(ok)
+        self.refresh()
+        msg = f"{len(ok)} partie(s) importée(s), +{fmt_int(gained)} coffres."
+        if failed:
+            msg += f" {failed} illisible(s)."
+        if err:
+            msg += f" Erreur : {err}"
+        self.import_desc.setText(msg)
 
     def _reset(self):
-        r = QMessageBox.question(self, "Réinitialiser",
-                                 "Supprimer DÉFINITIVEMENT toutes les statistiques (coffres, jetons, sessions, niveaux) ?\n"
-                                 "Une sauvegarde automatique sera faite avant.",
-                                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if r == QMessageBox.Yes:
+        if QMessageBox.question(self, "Tout réinitialiser",
+                                "Effacer définitivement toutes les statistiques ?\nUne sauvegarde automatique est "
+                                "faite avant.", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
             self.ctx.reset_stats()
+

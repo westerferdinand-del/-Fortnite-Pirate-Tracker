@@ -1,11 +1,10 @@
-"""Mini-widget flottant transparent, toujours au premier plan, déplaçable."""
+"""Widget en jeu v2 : capsule discrète affichant le total de coffres, toujours au premier plan, déplaçable."""
 from __future__ import annotations
 
-import math
 import time
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QLinearGradient, QPainter, QPen
+from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QMenu, QWidget
 
 from . import icons
@@ -20,7 +19,7 @@ class OverlayWidget(QWidget):
     open_dashboard = Signal()
     settings_changed = Signal()
 
-    BASE_W, BASE_H = 310, 64
+    BASE_W, BASE_H = 236, 44
 
     def __init__(self, config):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.NoDropShadowWindowHint)
@@ -33,8 +32,6 @@ class OverlayWidget(QWidget):
         self._drag: QPoint | None = None
         self._anim_t0: float | None = None
         self._timer = QTimer(self, interval=16, timeout=self._tick)
-        self._pulse = QTimer(self, interval=200, timeout=self.update)  # voyant d'état
-        self._pulse.start()
         self.apply_settings()
 
     # ------------------------------------------------------------------ settings
@@ -90,7 +87,7 @@ class OverlayWidget(QWidget):
     def _phase(self) -> float | None:
         if self._anim_t0 is None:
             return None
-        x = (time.monotonic() - self._anim_t0) / 1.2
+        x = (time.monotonic() - self._anim_t0) / 2.5
         if x >= 1:
             self._anim_t0 = None
             return None
@@ -103,44 +100,40 @@ class OverlayWidget(QWidget):
 
     # ------------------------------------------------------------------ painting
     def paintEvent(self, _):
+        """Capsule sombre : icône de coffre au trait, libellé discret, nombre."""
         s = self.scale
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.TextAntialiasing)
-        r = QRectF(self.rect()).adjusted(2, 2, -2, -2)
+        r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         ph = self._phase()
-        glow = (1 - ph) if ph is not None else 0.0
-        pop = math.sin(math.pi * ph) if ph is not None else 0.0
+        flash = (1 - ph) if ph is not None else 0.0
 
-        bg = QLinearGradient(r.topLeft(), r.bottomRight())
-        bg.setColorAt(0, QColor(20, 12, 42, 235))
-        bg.setColorAt(1, QColor(8, 10, 30, 235))
-        p.setBrush(bg)
-        border = QColor(T.GOLD) if glow > 0 else QColor(self.ocfg.get("accent", T.VIOLET))
-        border.setAlpha(int(150 + 105 * glow))
-        p.setPen(QPen(border, (1.5 + 2.5 * glow) * s))
-        p.drawRoundedRect(r, 14 * s, 14 * s)
+        p.setPen(QPen(QColor(255, 255, 255, 22), 1))
+        p.setBrush(QColor(11, 11, 13, 225))
+        p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
 
-        icon = 38 * s
-        icons.draw_chest(p, QRectF(r.x() + 12 * s, r.center().y() - icon / 2 - 2 * s, icon, icon), opened=glow > 0)
-
+        h = r.height()
+        icons.draw(p, "chest", QRectF(r.x() + h * 0.36, r.center().y() - h * 0.21, h * 0.42, h * 0.42),
+                   T.ACCENT, 1.8)
         p.setPen(QColor(T.MUTED))
-        f = T.ui_font(int(8 * s), QFont.Bold)
-        f.setLetterSpacing(QFont.AbsoluteSpacing, 1.0 * s)
-        p.setFont(f)
-        p.drawText(QRectF(r.x() + 60 * s, r.y(), r.width(), r.height()), Qt.AlignVCenter | Qt.AlignLeft,
-                   "COFFRES OUVERTS")
+        p.setFont(T.font(10.5 * s, QFont.DemiBold))
+        p.drawText(QRectF(r.x() + h * 0.95, r.y(), r.width(), h), Qt.AlignVCenter | Qt.AlignLeft, "COFFRES")
 
-        p.setFont(T.display_font(int((22 + 5 * pop) * s)))
-        p.setPen(QColor("#fff3b0") if pop > 0 else QColor(T.GOLD))
-        p.drawText(r.adjusted(0, 0, -26 * s, 0), Qt.AlignVCenter | Qt.AlignRight, f"{self.chests:03d}")
+        col = QColor(T.TEXT)
+        if flash > 0:  # le nombre passe brièvement à la couleur d'accent quand il augmente
+            a, b = QColor(T.ACCENT), QColor(T.TEXT)
+            col = QColor(int(b.red() + (a.red() - b.red()) * flash), int(b.green() + (a.green() - b.green()) * flash),
+                         int(b.blue() + (a.blue() - b.blue()) * flash))
+        p.setPen(col)
+        p.setFont(T.font(20 * s, QFont.DemiBold, display=True, tabular=True))
+        p.drawText(r.adjusted(0, 0, -h * 0.62, 0), Qt.AlignVCenter | Qt.AlignRight,
+                   f"{self.chests:,}".replace(",", "\u202f"))
 
         dot = QColor(STATUS_COLORS.get(self.status, T.RED))
-        pulse = 0.5 + 0.5 * math.sin(time.monotonic() * 4) if self.status == "active" else 1.0
-        dot.setAlpha(int(120 + 135 * pulse))
         p.setPen(Qt.NoPen)
         p.setBrush(dot)
-        p.drawEllipse(QPointF(r.right() - 12 * s, r.center().y()), 4 * s, 4 * s)
+        p.drawEllipse(QPointF(r.right() - h * 0.36, r.center().y()), 2.6 * s, 2.6 * s)
         p.end()
 
     # ------------------------------------------------------------------ interaction

@@ -63,7 +63,8 @@ def main(out: str):
     from pirate_tracker.ui import theme as T
 
     app.setStyle("Fusion")
-    app.setFont(T.ui_font(10))
+    T.load_fonts()
+    app.setFont(T.font(13))
     app.setStyleSheet(T.STYLESHEET)
     ctx = AppContext(app, start_watcher=False)
     ctx.tracker.import_results(demo_results())
@@ -71,14 +72,12 @@ def main(out: str):
     ctx.window.show()
     for key in ctx.window.pages:
         ctx.window.show_page(key)
-        if key == "history":
-            ctx.window.pages["history"].table.selectRow(0)
         pump(app, 0.4)
         ctx.window.grab().save(str(out_dir / f"{key}.png"))
     ctx.refresh_all(animate=False)
     pump(app, 0.2)
     ctx.overlay.grab().save(str(out_dir / "widget.png"))
-    ctx.toast_w.notify("chest_open", "+7 coffres cette partie", "Total : 112 coffres", 5)
+    ctx.toast_w.notify("+7 coffres", "2 641 coffres au total", 5)
     pump(app, 0.5)
     ctx.toast_w.grab().save(str(out_dir / "toast.png"))
     ctx.quit()

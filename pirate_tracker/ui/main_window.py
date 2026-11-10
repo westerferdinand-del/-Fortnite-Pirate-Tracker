@@ -1,17 +1,20 @@
-"""Fenêtre principale : barre latérale + pages."""
+"""Fenêtre principale v2 : barre latérale sobre + 4 pages."""
 from __future__ import annotations
 
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget,
                                QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
 from . import icons
 from . import theme as T
-from .pages import DashboardPage, HistoryPage, ProgressPage, RewardsPage
-from .replays_page import ReplaysPage
+from .pages import LootPage, MatchesPage, OverviewPage
 from .settings_page import SettingsPage
-from .widgets import muted
+from .widgets import StatusDot, faint
+
+NAV = [("overview", "overview", "Vue d'ensemble"), ("matches", "matches", "Parties"), ("loot", "loot", "Butin"),
+       ("settings", "settings", "Réglages")]
 
 
 class MainWindow(QMainWindow):
@@ -20,8 +23,8 @@ class MainWindow(QMainWindow):
         self.ctx = ctx
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(icons.app_icon())
-        self.resize(1260, 860)
-        self.setMinimumSize(1020, 680)
+        self.resize(1280, 860)
+        self.setMinimumSize(980, 640)
 
         root = QWidget()
         root.setObjectName("root")
@@ -31,83 +34,92 @@ class MainWindow(QMainWindow):
 
         side = QFrame()
         side.setObjectName("sidebar")
-        side.setFixedWidth(232)
+        side.setFixedWidth(224)
         sv = QVBoxLayout(side)
-        sv.setContentsMargins(16, 20, 16, 16)
-        sv.setSpacing(6)
+        sv.setContentsMargins(14, 22, 14, 18)
+        sv.setSpacing(2)
+
         brand = QHBoxLayout()
+        brand.setContentsMargins(8, 0, 0, 0)
+        brand.setSpacing(10)
         logo = QLabel()
-        logo.setPixmap(icons.app_pixmap(44))
+        pm = icons.app_pixmap(56)
+        pm.setDevicePixelRatio(2.0)
+        logo.setPixmap(pm)
         brand.addWidget(logo)
-        bcol = QVBoxLayout()
-        bcol.setSpacing(0)
-        t1 = QLabel("PIRATE")
-        t1.setFont(T.display_font(15))
-        t1.setStyleSheet(f"color: {T.GOLD};")
-        t2 = QLabel("TRACKER")
-        t2.setFont(T.display_font(11))
-        t2.setStyleSheet(f"color: {T.VIOLET}; letter-spacing: 3px;")
-        bcol.addWidget(t1)
-        bcol.addWidget(t2)
-        brand.addLayout(bcol)
+        name = QLabel("Pirate Tracker")
+        name.setFont(T.font(15, QFont.DemiBold))
+        brand.addWidget(name)
         brand.addStretch(1)
         sv.addLayout(brand)
-        sv.addSpacing(22)
+        sv.addSpacing(26)
 
         self.stack = QStackedWidget()
         self.pages = {
-            "dashboard": DashboardPage(ctx),
-            "history": HistoryPage(ctx),
-            "rewards": RewardsPage(ctx),
-            "progress": ProgressPage(ctx),
-            "replays": ReplaysPage(ctx),
+            "overview": OverviewPage(ctx),
+            "matches": MatchesPage(ctx),
+            "loot": LootPage(ctx),
             "settings": SettingsPage(ctx),
         }
-        nav = [("dashboard", "chest", "Tableau de bord"), ("history", "list", "Historique"),
-               ("rewards", "trophy", "Récompenses"), ("progress", "star", "Étoiles && niveaux"),
-               ("replays", "eye", "Replays"),
-               ("settings", "gear", "Paramètres")]
         self.group = QButtonGroup(self)
         self.group.setExclusive(True)
         self.nav_buttons = {}
-        for i, (key, ic, label) in enumerate(nav):
+        for i, (key, ic, text) in enumerate(NAV):
             self.stack.addWidget(self.pages[key])
-            b = QPushButton("  " + label)
+            b = QPushButton("  " + text)
             b.setObjectName("nav")
             b.setCheckable(True)
-            b.setIcon(icons.icon(ic, 22))
-            b.setIconSize(QSize(22, 22))
+            b.setIcon(icons.icon(ic, 18))
+            b.setIconSize(QSize(18, 18))
+            b.setFont(T.font(13, QFont.Medium))
+            b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(lambda _=False, k=key: self.show_page(k))
             self.group.addButton(b, i)
             self.nav_buttons[key] = b
             sv.addWidget(b)
         sv.addStretch(1)
 
+        self.status = StatusDot()
+        self.status.setContentsMargins(0, 0, 0, 0)
+        st = QHBoxLayout()
+        st.setContentsMargins(10, 0, 0, 0)
+        st.addWidget(self.status)
+        sv.addLayout(st)
+        sv.addSpacing(10)
         self.widget_btn = QPushButton("Masquer le widget")
+        self.widget_btn.setObjectName("nav")
+        self.widget_btn.setIcon(icons.icon("chest", 18))
+        self.widget_btn.setIconSize(QSize(18, 18))
+        self.widget_btn.setFont(T.font(13, QFont.Medium))
+        self.widget_btn.setCursor(Qt.PointingHandCursor)
         self.widget_btn.clicked.connect(ctx.toggle_overlay)
         sv.addWidget(self.widget_btn)
-        foot = muted(f"v{__version__} · lecture des replays uniquement,\naucune modification du jeu", wrap=True)
-        foot.setFont(T.ui_font(7))
-        sv.addWidget(foot)
+        sv.addSpacing(6)
+        ver = faint(f"v{__version__}", wrap=False)
+        ver.setFont(T.font(11))
+        ver.setContentsMargins(10, 0, 0, 0)
+        sv.addWidget(ver)
 
         h.addWidget(side)
         h.addWidget(self.stack, 1)
         self.setCentralWidget(root)
-        self.show_page("dashboard")
+        self.show_page("overview")
 
     def show_page(self, key: str):
         self.nav_buttons[key].setChecked(True)
         page = self.pages[key]
         self.stack.setCurrentWidget(page)
-        if hasattr(page, "refresh"):
-            page.refresh(False) if key in ("dashboard", "progress") else page.refresh()
+        page.refresh()
+
+    def set_status(self, level: str, message: str):
+        self.status.set_status(level, message)
 
     def closeEvent(self, e):
-        # Fermer la fenêtre ne quitte pas : le comptage continue (icône dans la barre des tâches).
+        # Fermer la fenêtre ne quitte pas : le comptage continue (icône près de l'horloge).
         if self.ctx.quitting:
             e.accept()
             return
         e.ignore()
         self.hide()
         self.ctx.tray_message("Pirate Tracker continue de compter",
-                              "Le comptage reste actif. Clic droit sur l'icône pour quitter.")
+                              "Clic droit sur l'icône près de l'horloge pour quitter.")

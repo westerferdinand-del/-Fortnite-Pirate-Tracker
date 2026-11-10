@@ -121,7 +121,7 @@ class AppContext:
 
     def _sync_overlay_btn(self):
         vis = bool(self.config.get("overlay", "visible", True))
-        self.window.widget_btn.setText("Masquer le widget" if vis else "Afficher le widget")
+        self.window.widget_btn.setText("  Masquer le widget" if vis else "  Afficher le widget")
         if hasattr(self, "act_overlay"):
             self.act_overlay.blockSignals(True)
             self.act_overlay.setChecked(vis)
@@ -131,58 +131,58 @@ class AppContext:
         self.config.set("overlay", "visible", not self.config.get("overlay", "visible", True))
         self.apply_overlay()
 
-    def toast(self, icon: str, title: str, body: str, duration: float = 2.6):
+    def toast(self, title: str, body: str = "", duration: float = 3.0):
         if self.config.get("notifications", "enabled", True):
-            self.toast_w.notify(icon, title, body, duration)
+            self.toast_w.notify(title, body, duration)
 
     def refresh_all(self, animate: bool = True):
         self.overlay.set_chests(self.tracker.db.total_chests())
         page = self.window.stack.currentWidget()
         for key, pg in self.window.pages.items():
             if pg is page and hasattr(pg, "refresh"):
-                pg.refresh(animate) if key in ("dashboard", "progress") else pg.refresh()
+                pg.refresh()
 
     # ------------------------------------------------------------------ events
     def _on_status(self, status):
         self.overlay.set_status(status.level)
-        self.window.pages["dashboard"].set_status(status.level, status.message)
-        self.window.pages["replays"].set_status(status)
+        self.window.set_status(status.level, status.message)
+        self.window.pages["settings"].set_status(status)
         self.tray.setToolTip(f"{APP_NAME} — {status.message}")
-        if self.window.stack.currentWidget() is self.window.pages["replays"]:
-            self.window.pages["replays"].refresh()
+        if self.window.stack.currentWidget() is self.window.pages["settings"]:
+            self.window.pages["settings"].refresh()
 
     def _on_tracker_event(self, kind: str, p: dict):
         n = self.config.section("notifications")
         if kind == "match" and p.get("notify"):
             if not p.get("ok"):
-                self.toast("eye", "Replay illisible", (p.get("error") or "")[:60], 4.0)
+                self.toast("Replay illisible", (p.get("error") or "")[:60], 4.0)
             elif p["chests"] == 0 and p.get("warnings"):
                 # Résultat suspect : on le dit clairement plutôt que d'annoncer « aucun coffre »
-                self.toast("eye", "Analyse à vérifier", p["warnings"][0][:70], 6.0)
+                self.toast("Analyse à vérifier", p["warnings"][0][:70], 6.0)
                 self.tray_message("Pirate Tracker : analyse à vérifier", p["warnings"][0])
             elif n.get("on_match", True):
                 c = p["chests"]
-                title = f"+{c} coffre{'s' if c > 1 else ''} cette partie" if c else "Aucun coffre cette partie"
+                title = f"+{c} coffre{'s' if c > 1 else ''}" if c else "Aucun coffre cette partie"
                 self.sound.play("match")
-                self.toast("chest_open", title, f"Total : {p['total']} coffres", 4.0)
+                self.toast(title, f"{p['total']:,} coffres au total".replace(",", "\u202f"), 4.0)
                 self.tray_message("Partie analysée", f"{title} — total : {p['total']} coffres")
         elif kind in ("star", "level"):
             self.sound.play("level")
             if n.get("on_level", True):
                 if kind == "level":
-                    self.toast("trophy", f"NIVEAU {p['level']} !", f"{p['total']} coffres ouverts au total", 3.5)
+                    self.toast(f"Niveau {p['level']}", f"{p['total']} coffres au total", 3.5)
                 else:
-                    self.toast("star", f"Étoile {p['stars']} obtenue !", f"Niveau {p['level']} · {p['total']} coffres", 3.0)
+                    self.toast(f"Palier {p['stars']}/5 atteint", f"Niveau {p['level']} · {p['total']} coffres", 3.0)
         elif kind == "record":
             self.sound.play("record")
             if n.get("on_record", True):
-                self.toast("trophy", "Nouveau record !", f"{p['match_chests']} coffres en une partie", 3.5)
+                self.toast("Nouveau record", f"{p['match_chests']} coffres en une partie", 3.5)
         elif kind == "token":
             self.sound.play("token")
             if n.get("on_token", True):
                 self.tray_message("JETON PIRATE TROUVÉ !", f"Après {p['chests_since_previous']} coffres.")
         elif kind == "imported":
-            self.toast("list", "Import terminé", f"{p['count']} partie(s) · +{p['chests']} coffres", 3.5)
+            self.toast("Import terminé", f"{p['count']} partie(s) · +{p['chests']} coffres", 3.5)
         self.refresh_all(animate=kind not in ("reset", "imported", "tokens_rebuilt", "initial_changed"))
 
     # ------------------------------------------------------------------ data actions
@@ -194,21 +194,21 @@ class AppContext:
         p = self._ask_save("Exporter l'historique (CSV)", f"pirate_tracker_{datetime.now():%Y%m%d}.csv", "CSV (*.csv)")
         if p:
             self.db.export_csv(Path(p))
-            self.toast("list", "Export terminé", Path(p).name)
+            self.toast("Export terminé", Path(p).name)
 
     def export_json(self):
         p = self._ask_save("Exporter toutes les données (JSON)", f"pirate_tracker_{datetime.now():%Y%m%d}.json",
                            "JSON (*.json)")
         if p:
             self.db.export_json(Path(p))
-            self.toast("list", "Export terminé", Path(p).name)
+            self.toast("Export terminé", Path(p).name)
 
     def backup(self):
         p = self._ask_save("Sauvegarder la base de données", f"pirate_tracker_sauvegarde_{datetime.now():%Y%m%d}.db",
                            "Base SQLite (*.db)")
         if p:
             self.db.backup(Path(p))
-            self.toast("list", "Sauvegarde créée", Path(p).name)
+            self.toast("Sauvegarde créée", Path(p).name)
 
     def restore(self):
         p, _ = QFileDialog.getOpenFileName(self.window, "Restaurer une sauvegarde", str(backups_dir()),
@@ -294,7 +294,8 @@ def main(argv=None):
     app.setApplicationName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
     app.setStyle("Fusion")
-    app.setFont(T.ui_font(10))
+    T.load_fonts()
+    app.setFont(T.font(13))
     app.setStyleSheet(T.STYLESHEET)
     app.setWindowIcon(icons.app_icon())
 

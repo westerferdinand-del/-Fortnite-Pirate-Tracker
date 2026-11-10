@@ -187,9 +187,10 @@ def test_ui_smoke(tmp_path, monkeypatch):
         for key in ctx.window.pages:
             ctx.window.show_page(key)
             app.processEvents()
-        assert ctx.window.pages["dashboard"].hero.big.text() == "013"
-        assert ctx.window.pages["history"].table.rowCount() == 2
-        assert ctx.window.pages["rewards"].table.rowCount() >= 1
+        assert ctx.window.pages["overview"].total.text() == "13"
+        assert ctx.window.pages["overview"].recent.rowCount() == 2
+        assert ctx.window.pages["matches"].table.rowCount() == 2
+        assert ctx.window.pages["loot"].table.rowCount() >= 1
     finally:
         ctx.quit()
 

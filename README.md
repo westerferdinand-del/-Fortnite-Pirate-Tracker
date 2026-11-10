@@ -1,4 +1,4 @@
-# 🏴‍☠️ Pirate Tracker — compteur automatique de coffres Fortnite
+# Pirate Tracker — compteur automatique de coffres Fortnite
 
 Pirate Tracker compte **tout seul** les coffres que vous ouvrez dans Fortnite, en lisant les
 **replays** que le jeu enregistre à la fin de chaque partie. Le total de coffres ouverts s'affiche
@@ -8,7 +8,7 @@ obtenues.
 
 Aucun bouton à presser, aucune capture d'écran, aucune interaction avec le jeu.
 
-![Tableau de bord](docs/dashboard.png)
+![Vue d'ensemble](docs/overview.png)
 
 | Widget pendant la partie | Notification de fin de partie |
 |---|---|
@@ -18,10 +18,16 @@ Aucun bouton à presser, aucune capture d'écran, aucune interaction avec le jeu
 
 ## Installation
 
-1. Sur GitHub : onglet **Actions** → dernière exécution réussie de **Windows build** →
-   téléchargez l'artefact **PirateTracker-Windows**.
-2. Lancez `PirateTracker-Setup-1.1.0.exe` (aucun droit administrateur requis).
-   Une version portable (`PirateTracker-portable.zip`) est aussi fournie.
+Téléchargement direct (dernière version, sans compte GitHub) :
+**[PirateTracker-Setup.exe](https://github.com/westerferdinand-del/-Fortnite-Pirate-Tracker/releases/download/latest/PirateTracker-Setup.exe)**
+— aucun droit administrateur requis. Version portable :
+[PirateTracker-portable.zip](https://github.com/westerferdinand-del/-Fortnite-Pirate-Tracker/releases/download/latest/PirateTracker-portable.zip).
+
+Installation ou mise à jour en une commande (Windows + R → `powershell` → coller) :
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $ProgressPreference="SilentlyContinue"; Stop-Process -Name PirateTracker,PirateReplayReader -Force -ErrorAction SilentlyContinue; $f="$env:TEMP\PirateTracker-Setup.exe"; Invoke-WebRequest "https://github.com/westerferdinand-del/-Fortnite-Pirate-Tracker/releases/download/latest/PirateTracker-Setup.exe" -OutFile $f -UseBasicParsing; Start-Process $f -ArgumentList "/SILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait; Start-Process "$env:LOCALAPPDATA\Programs\PirateTracker\PirateTracker.exe"
+```
 
 > Windows SmartScreen peut afficher « Windows a protégé votre ordinateur » car l'exécutable n'est
 > pas signé : *Informations complémentaires → Exécuter quand même*.
@@ -52,7 +58,7 @@ Un replay Fortnite contient les données réseau de la partie. Pour chaque coffr
    y compris les **coffres spéciaux** : toute variante de coffre est reconnue automatiquement,
    même nouvelle. Les coffres de vos coéquipiers ou des adversaires ne comptent pas, pas plus
    que les caisses de munitions ou les meubles fouillables ;
-3. relève les objets que vous avez ramassés (page Récompenses) et détecte le **jeton pirate**
+3. relève les objets que vous avez ramassés (page Butin) et détecte le **jeton pirate**
    d'après le nom de l'objet.
 
 Garde-fous contre les erreurs de comptage :
@@ -71,10 +77,10 @@ Pendant que vous jouez, l'application ne fait rien d'autre qu'attendre, donc ell
 
 Le nom interne exact de l'objet « jeton pirate » dans les fichiers du jeu n'était pas connu pendant
 le développement. Il est reconnu automatiquement si son nom contient *pirate* avec *token / coin /
-doubloon / medal*. Sinon, ouvrez la page **Récompenses**, sélectionnez l'objet et cliquez sur
-**« C'est le jeton pirate »** : toutes vos parties sont recalculées. À chaque découverte : une
+doubloon / medal*. Sinon, ouvrez la page **Butin**, sélectionnez l'objet et cliquez sur
+**« Marquer comme jeton pirate »** : toutes vos parties sont recalculées. À chaque découverte : une
 notification Windows (« JETON PIRATE TROUVÉ ! Après N coffres ») et un son, sans animation ; les
-deux se désactivent dans les Paramètres. Le nombre de jetons trouvés n'est volontairement pas
+deux se désactivent dans les Réglages. Le nombre de jetons trouvés n'est volontairement pas
 affiché.
 
 ---
@@ -111,25 +117,26 @@ partie, il ne fait que regarder si un nouveau fichier est apparu dans le dossier
 
 ---
 
-## Pages
+## Interface
 
-- **Widget en jeu** : uniquement le total de coffres ouverts (taille, position et opacité
-  réglables ; clic droit pour le menu, double-clic pour le tableau de bord).
-- **Tableau de bord** : total, dernière partie, moyenne par partie, coffres depuis le dernier
-  jeton, aujourd'hui, record, temps de jeu analysé, graphiques.
-- **Historique** : toutes les parties (date, durée, mode, classement, éliminations, coffres),
-  avec les objets obtenus dans chacune.
-- **Récompenses** : tout ce que vous avez obtenu (armes par rareté, soins, objets…), combien de
-  fois, depuis quand. C'est aussi ici que l'on désigne le jeton pirate.
-- **Étoiles & niveaux** : 5 étoiles par niveau, paliers personnalisables, historique.
-- **Replays** : état de l'analyse, aide à l'activation, import des anciennes parties.
-- **Paramètres** : widget (taille, position, opacité), notifications, sons,
-  sauvegarde/export/restauration, réinitialisation, lancement au démarrage de Windows.
+Interface v2 : sobre, noir profond, une seule couleur d'accent, police Inter.
+
+- **Widget en jeu** : une capsule discrète avec le total de coffres. Taille, position et opacité
+  réglables ; glisser pour déplacer, clic droit pour le menu, double-clic pour ouvrir l'application.
+- **Vue d'ensemble** : total (dont ouverts / cassés / spéciaux), niveau et paliers, dernière
+  partie, aujourd'hui, moyenne, coffres depuis le dernier jeton, coffres par jour, records,
+  dernières parties.
+- **Parties** : toutes les parties (date, mode, durée, classement, éliminations, coffres), avec le
+  détail de chacune : ouverts, cassés, spéciaux, objets ramassés.
+- **Butin** : tout ce que vous avez ramassé, par rareté, avec filtres. C'est aussi ici que l'on
+  désigne le jeton pirate s'il n'est pas reconnu automatiquement.
+- **Réglages** : coffres d'avant Pirate Tracker, paliers, replays (état, dossier, import des
+  anciennes parties), widget, notifications et sons, sauvegarde, démarrage avec Windows.
 
 | | |
 |---|---|
-| ![Historique](docs/history.png) | ![Récompenses](docs/rewards.png) |
-| ![Replays](docs/replays.png) | ![Progression](docs/progress.png) |
+| ![Parties](docs/matches.png) | ![Butin](docs/loot.png) |
+| ![Réglages](docs/settings.png) | |
 
 Données : `%APPDATA%\PirateTracker\` (base SQLite, réglages, sauvegardes automatiques).
 
