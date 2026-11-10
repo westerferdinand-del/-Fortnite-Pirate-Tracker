@@ -20,7 +20,7 @@ from .sound import SoundPlayer
 from .tracker import Tracker
 from .ui import icons
 from .ui import theme as T
-from .ui.effects import TokenCelebration, Toast
+from .ui.effects import Toast
 from .ui.main_window import MainWindow
 from .ui.overlay import OverlayWidget
 
@@ -61,7 +61,6 @@ class AppContext:
         self.bridge.tracker_event.connect(self._on_tracker_event)
 
         self.toast_w = Toast()
-        self.celebration = TokenCelebration()
         self.overlay = OverlayWidget(self.config)
         self.overlay.open_dashboard.connect(self.show_window)
         self.overlay.settings_changed.connect(self._sync_overlay_btn)
@@ -177,7 +176,6 @@ class AppContext:
         elif kind == "token":
             self.sound.play("token")
             if n.get("on_token", True):
-                self.celebration.play(p["chests_since_previous"])
                 self.tray_message("JETON PIRATE TROUVÉ !", f"Après {p['chests_since_previous']} coffres.")
         elif kind == "imported":
             self.toast("list", "Import terminé", f"{p['count']} partie(s) · +{p['chests']} coffres", 3.5)

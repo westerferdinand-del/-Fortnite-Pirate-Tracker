@@ -67,9 +67,10 @@ Pendant que vous jouez, l'application ne fait rien d'autre qu'attendre, donc ell
 Le nom interne exact de l'objet « jeton pirate » dans les fichiers du jeu n'était pas connu pendant
 le développement. Il est reconnu automatiquement si son nom contient *pirate* avec *token / coin /
 doubloon / medal*. Sinon, ouvrez la page **Récompenses**, sélectionnez l'objet et cliquez sur
-**« C'est le jeton pirate »** : toutes vos parties sont recalculées. À chaque découverte : grande
-animation à l'écran, son, notification, et le nombre de coffres qu'il a fallu ouvrir. Le nombre
-de jetons trouvés n'est volontairement pas affiché.
+**« C'est le jeton pirate »** : toutes vos parties sont recalculées. À chaque découverte : une
+notification Windows (« JETON PIRATE TROUVÉ ! Après N coffres ») et un son, sans animation ; les
+deux se désactivent dans les Paramètres. Le nombre de jetons trouvés n'est volontairement pas
+affiché.
 
 ---
 
