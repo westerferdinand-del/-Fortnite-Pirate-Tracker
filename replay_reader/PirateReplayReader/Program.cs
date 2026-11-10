@@ -17,7 +17,7 @@ using Unreal.Core.Contracts;
 using Unreal.Core.Models;
 using Unreal.Core.Models.Enums;
 
-const string Version = "1.0.0";
+const string Version = "1.2.0";
 
 var jsonOptions = new JsonSerializerOptions
 {
@@ -103,6 +103,10 @@ public class MatchResult
     public List<ChestOpen> Chests { get; set; } = new();
     public List<ItemPickup> Items { get; set; } = new();
     public int ChestsSeen { get; set; }
+    /// <summary>Conteneurs NON comptés comme coffres que le joueur a fouillés (classe → nombre).</summary>
+    public Dictionary<string, int> OtherContainersSearched { get; set; } = new();
+    /// <summary>Coffres comptés, par classe exacte (classe → nombre).</summary>
+    public Dictionary<string, int> ChestClassesOpened { get; set; } = new();
     public int PawnsSeen { get; set; }
     public int OwnerPawns { get; set; }
     public int ChestSearchesSeen { get; set; }
@@ -120,6 +124,9 @@ public abstract class ExtraChest : BaseContainer { }
 [NetFieldExportGroup(ChestReplayReader.GenericChestPath, minimalParseMode: ParseMode.Normal)]
 public class GenericChest : ExtraChest { }
 
+[NetFieldExportGroup(ChestReplayReader.GenericContainerPath, minimalParseMode: ParseMode.Normal)]
+public class GenericContainer : BaseContainer { }
+
 public class ChestReplayReader : FortniteReplayReader.ReplayReader
 {
     public const string StandardChestPath = "/Game/Building/ActorBlueprints/Containers/Tiered_Chest_Athena.Tiered_Chest_Athena_C";
@@ -127,6 +134,8 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
     public const string PlayerPawnPath = "/Game/Athena/PlayerPawn_Athena.PlayerPawn_Athena_C";
     private static readonly string[] NotChestWords = { "Ammo", "Spawner", "Manager", "Component", "GC_", "Cue", "Chestplate" };
     private static readonly HashSet<string> AliasedPaths = new();
+    private static readonly string[] ContainerWords = { "Container", "Cache", "Loot", "Stash", "Crate", "Coffer", "Safe" };
+    public const string GenericContainerPath = "/PirateTracker/GenericContainer.GenericContainer_C";
 
     /// <summary>Une classe inconnue est-elle un coffre ? (nom contenant « Chest », hors meubles et caisses de munitions)</summary>
     public static string? ChestAlias(string path)
@@ -143,22 +152,36 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
             }
             return PlayerPawnPath;
         }
-        if (!name.Contains("Chest", StringComparison.OrdinalIgnoreCase)
-            || path.Contains("/Props/", StringComparison.OrdinalIgnoreCase)
-            || NotChestWords.Any(w => name.Contains(w, StringComparison.OrdinalIgnoreCase)))
+        var looksLikeChest = (name.Contains("Chest", StringComparison.OrdinalIgnoreCase)
+                              || name.Contains("Treasure", StringComparison.OrdinalIgnoreCase))
+                             && !path.Contains("/Props/", StringComparison.OrdinalIgnoreCase)
+                             && !NotChestWords.Any(w => name.Contains(w, StringComparison.OrdinalIgnoreCase));
+        // Autres conteneurs fouillables (caisses de munitions, meubles, nouveautés…) : lus pour le
+        // diagnostic, jamais comptés comme coffres.
+        var looksLikeContainer = path.StartsWith("/", StringComparison.Ordinal)
+                                 && !name.Contains("ClassNetCache", StringComparison.OrdinalIgnoreCase)
+                                 && !name.Contains("Component", StringComparison.OrdinalIgnoreCase)
+                                 && (path.Contains("/Containers/", StringComparison.OrdinalIgnoreCase)
+                                     || ContainerWords.Any(w => name.Contains(w, StringComparison.OrdinalIgnoreCase)));
+        if (!looksLikeChest && !looksLikeContainer)
         {
             return null;
         }
-        lock (AliasedPaths)
+        if (looksLikeChest)
         {
-            AliasedPaths.Add(path);
+            lock (AliasedPaths)
+            {
+                AliasedPaths.Add(path);
+            }
         }
-        return GenericChestPath;
+        return looksLikeChest ? GenericChestPath : GenericContainerPath;
     }
 
     private readonly Dictionary<uint, uint> _channelActor = new();
     internal readonly Dictionary<uint, uint> _pawnToPlayerState = new();
     internal readonly List<(float t, uint chest, string path, uint pawn, bool broken)> _opens = new();
+    private readonly List<(string path, uint pawn)> _otherSearches = new();
+    private readonly HashSet<(uint, uint)> _otherSearchKeys = new();
     private uint? _recorderId;
     private readonly HashSet<uint> _relevancyPawns = new();
     private readonly Dictionary<uint, int> _lootTier = new();
@@ -247,6 +270,14 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
                 break;
 
             // Coffres uniquement (les caisses de munitions et autres conteneurs sont ignorés)
+            case BaseContainer other when other is not (Chest or FactionChest or ExtraChest):
+                // Conteneur qui n'est pas un coffre : on note qui le fouille (diagnostic)
+                if (other.SearchingPawn is uint sp && sp != 0 && _otherSearchKeys.Add((actor, sp)))
+                {
+                    _otherSearches.Add((CurrentExportPath ?? other.GetType().Name, sp));
+                }
+                break;
+
             case BaseContainer chest when chest is Chest or FactionChest or ExtraChest:
                 _chestsSeen.Add(actor);
                 var classPath = CurrentExportPath ?? chest.GetType().Name;
@@ -434,7 +465,7 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
         result.ChestSearchesSeen = _opens.Select(o => o.chest).Distinct().Count();
         lock (AliasedPaths)
         {
-            result.AliasedClasses = AliasedPaths.OrderBy(x => x).ToList();
+            result.AliasedClasses = AliasedPaths.Select(p => p[(p.LastIndexOf('/') + 1)..].Split('.')[0]).OrderBy(x => x).ToList();
         }
         if (_chestsSeen.Count == 0 && result.DurationS > 120)
         {
@@ -482,6 +513,15 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
             result.Warnings.Add("Des coffres ont été ouverts dans la partie mais aucun coffre ni objet n'est attribué au joueur : "
                                 + "son personnage n'a probablement pas été identifié.");
         }
+
+        static string Short(string path)
+        {
+            var n = path[(path.LastIndexOf('/') + 1)..];
+            return n.Contains('.') ? n[..n.IndexOf('.')] : n;
+        }
+        result.OtherContainersSearched = _otherSearches.Where(o => ownerPawns.Contains(o.pawn))
+            .GroupBy(o => Short(o.path)).OrderByDescending(g => g.Count()).ToDictionary(g => g.Key, g => g.Count());
+        result.ChestClassesOpened = result.Chests.GroupBy(c => c.Kind).ToDictionary(g => g.Key, g => g.Count());
 
         var seenPickups = new HashSet<uint>();
         foreach (var p in _pickedUp.OrderBy(p => p.t))

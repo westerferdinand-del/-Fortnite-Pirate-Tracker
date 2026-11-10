@@ -302,6 +302,10 @@ class MatchesPage(QWidget):
         top = QHBoxLayout()
         self.detail_title = section("Sélectionnez une partie")
         top.addWidget(self.detail_title, 1)
+        self.copy_btn = QPushButton("Copier le diagnostic")
+        self.copy_btn.setToolTip("Copie un résumé technique de l'analyse de cette partie, à coller dans un message")
+        self.copy_btn.clicked.connect(self._copy_diag)
+        top.addWidget(self.copy_btn)
         self.del_btn = QPushButton("Retirer du compteur")
         self.del_btn.setObjectName("danger")
         self.del_btn.clicked.connect(self._delete)
@@ -394,6 +398,36 @@ class MatchesPage(QWidget):
             self.items.setItem(i, 1, name)
             self.items.setItem(i, 2, cell(info.rarity or "—", color=T.RARITY.get(info.rarity, T.MUTED)))
             self.items.setItem(i, 3, cell(r["count"] or 1, NUM, color=T.TEXT2, tabular=True))
+
+    def diagnostic_text(self, m) -> str:
+        """Résumé lisible de l'analyse d'une partie (à transmettre pour améliorer le comptage)."""
+        from .. import __version__
+
+        d = m.diagnostics or {}
+        lines = [f"Pirate Tracker v{__version__} · lecteur {d.get('reader_version', '?')}",
+                 f"Fortnite : {d.get('branch', '?')} · mode : {m.playlist or '?'} · durée : {fmt_duration(m.duration)}",
+                 f"Coffres comptés : {m.chests} (ouverts {m.chests - m.broken}, cassés {m.broken})",
+                 f"Coffres par classe : {d.get('chest_classes_opened') or '{}'}",
+                 f"Autres conteneurs fouillés (non comptés) : {d.get('other_containers_searched') or '{}'}",
+                 f"Joueur identifié : {d.get('owner_found')} · personnages : {d.get('owner_pawns')} / {d.get('pawns_seen')}"
+                 f" · suivi replay : {d.get('relevancy_pawns')}",
+                 f"Coffres vus dans la partie : {d.get('chests_seen')} · ouverts par quelqu'un : "
+                 f"{d.get('chests_opened_by_anyone')} · avec ouvreur connu : {d.get('chest_searches_seen')}",
+                 f"Classes reconnues automatiquement : {d.get('aliased_classes') or []}",
+                 f"Replay incomplet : {bool(d.get('partial'))} · analyse OK : {m.ok}"]
+        if m.warnings:
+            lines.append("Avertissements : " + " | ".join(m.warnings))
+        if m.error:
+            lines.append(f"Erreur : {m.error}")
+        return "\n".join(lines)
+
+    def _copy_diag(self):
+        from PySide6.QtWidgets import QApplication
+
+        m = self._selected()
+        if m:
+            QApplication.clipboard().setText(self.diagnostic_text(m))
+            self.ctx.toast("Diagnostic copié", "Collez-le (Ctrl+V) dans votre message")
 
     def _delete(self):
         m = self._selected()

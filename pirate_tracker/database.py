@@ -76,8 +76,9 @@ CREATE INDEX IF NOT EXISTS idx_items_match ON items(match_id);
 
 
 # Informations techniques conservées pour comprendre une analyse surprenante (ex. 0 coffre)
-DIAG_KEYS = ("reader_version", "branch", "owner_found", "pawns_seen", "owner_pawns", "chests_seen",
-             "chest_searches_seen", "chests_opened_by_anyone", "aliased_classes", "special_chest_classes")
+DIAG_KEYS = ("reader_version", "branch", "owner_found", "relevancy_pawns", "pawns_seen", "owner_pawns", "chests_seen",
+             "chest_searches_seen", "chests_opened_by_anyone", "aliased_classes", "special_chest_classes",
+             "chest_classes_opened", "other_containers_searched", "partial", "duration_s")
 
 
 @dataclass

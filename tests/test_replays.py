@@ -238,3 +238,28 @@ def test_end_to_end_real_replay_through_watcher(tmp_path):
     w.scan(st.st_mtime + 120)  # déjà compté : aucun double comptage
     assert db.stats().total_chests == 5 and db.stats().matches_count == 1
     db.close()
+
+
+@needs_reader
+def test_diagnostic_text_for_a_real_match(tmp_path, monkeypatch):
+    """Le diagnostic copiable liste les coffres par classe et les autres conteneurs fouillés."""
+    monkeypatch.setenv("PIRATE_TRACKER_HOME", str(tmp_path))
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from pirate_tracker.app import AppContext
+
+    ctx = AppContext(app, start_watcher=False)
+    try:
+        res = replays.read_replay(SAMPLE)
+        ctx.tracker.record_match(res, size=1, mtime=1.0)
+        page = ctx.window.pages["matches"]
+        page.refresh()
+        text = page.diagnostic_text(ctx.tracker.db.matches()[0])
+        print(text)
+        assert "Coffres comptés : 5 (ouverts 3, cassés 2)" in text
+        assert "'Tiered_Chest_Athena': 5" in text
+        assert "'Tiered_Ammo_Athena': 8" in text  # caisses de munitions : vues mais pas comptées
+        assert "++Fortnite+Release-32.00" in text
+    finally:
+        ctx.quit()
