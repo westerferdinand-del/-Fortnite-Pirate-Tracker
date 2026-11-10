@@ -20,7 +20,7 @@ Aucun bouton à presser, aucune capture d'écran, aucune interaction avec le jeu
 
 1. Sur GitHub : onglet **Actions** → dernière exécution réussie de **Windows build** →
    téléchargez l'artefact **PirateTracker-Windows**.
-2. Lancez `PirateTracker-Setup-1.0.0.exe` (aucun droit administrateur requis).
+2. Lancez `PirateTracker-Setup-1.1.0.exe` (aucun droit administrateur requis).
    Une version portable (`PirateTracker-portable.zip`) est aussi fournie.
 
 > Windows SmartScreen peut afficher « Windows a protégé votre ordinateur » car l'exécutable n'est
