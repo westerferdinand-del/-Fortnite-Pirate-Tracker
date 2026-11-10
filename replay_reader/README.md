@@ -50,6 +50,29 @@ dans une mise à jour séparée, coffre cassé…), exécuté par les tests et l
 `faction`, `spécial`, d'après le nom de la classe. Seuls rare / enterré / faction / spécial sont
 marqués `special` : les coffres normaux d'une nouvelle saison ne le sont plus (bug corrigé en 2.1).
 
+**Architecture de l'analyse (lecteur 1.3)**
+1. Lecture : bibliothèque intégrée (`vendor/`).
+2. Résolution des classes : toute classe inconnue est lue avec une description générique
+   (`PathAliasWithFields`). Les propriétés d'une classe ne sont déclarées dans le replay qu'à leur
+   première transmission : on ne peut donc pas trier sur les propriétés à la première apparition.
+   Le rôle (coffre / autre conteneur / personnage) est décidé sur les données réellement observées
+   (`class_decisions` donne le rôle et la preuve de chaque classe).
+3. Identité du joueur : `RecorderPlayerState`, puis tous les `PlayerPawn` dont `PlayerState` pointe
+   vers lui (plusieurs personnages en cas de réapparition), et en secours `PawnForReplayRelevancy`.
+4. Interactions : ouverture = augmentation de `SearchAnimationCount` ; joueur transmis dans la même
+   mise à jour (`direct`) ou dernier ouvreur connu (`direct: false`, signalé). Cassé = ouverture
+   accompagnée de `bDestroyed`/`bInstantDeath`. Un coffre détruit après ouverture n'est pas recompté.
+5. Statistiques : `total_openings` (réouvertures comprises) et `unique_chests` (coffres différents).
+6. Journal : `decisions` (chaque événement de coffre du joueur : compté / ignoré, pourquoi).
+
+Tests : `--selftest` (28 vérifications simulées : ouvert, rouvert ×3, cassé, ouvert puis cassé,
+adversaire, plusieurs joueurs, changement de personnage, déjà ouvert, classification) + replay réel
+du Chapitre 5 en non-régression.
+
+**Non vérifié faute de replay** : le comportement réel des coffres du Chapitre 7 (noms de classes,
+remplissage, destruction). Le diagnostic de l'application (Parties → Copier le diagnostic) et les
+journaux (`%APPDATA%\PirateTracker\logs`) donnent ces informations à partir d'une vraie partie.
+
 Limite : les replays très anciens (2020, v11) ne contiennent pas `SearchingPawn` → aucun coffre
 compté, avec un avertissement.
 

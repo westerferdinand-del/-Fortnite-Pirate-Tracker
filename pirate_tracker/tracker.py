@@ -55,6 +55,13 @@ class Tracker:
             before_total = self.db.total_chests()
             best_before = self.db.stats().best_match
             info = self.db.upsert_match(res, size, mtime)
+            try:  # journal d'analyse lisible (pourquoi chaque coffre a été compté ou ignoré)
+                from . import __version__
+                from .analysis_log import write_log
+
+                write_log(res, f"v{__version__}")
+            except Exception:  # noqa: BLE001 - le journal ne doit jamais bloquer le comptage
+                pass
             after_total = self.db.total_chests()
 
             tokens = []

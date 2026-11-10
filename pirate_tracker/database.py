@@ -43,7 +43,10 @@ CREATE TABLE IF NOT EXISTS chest_events (
     kind TEXT NOT NULL DEFAULT '',
     how TEXT NOT NULL DEFAULT 'ouvert',
     special INTEGER NOT NULL DEFAULT 0,
-    category TEXT NOT NULL DEFAULT 'standard'
+    category TEXT NOT NULL DEFAULT 'standard',
+    chest_id INTEGER,
+    direct INTEGER NOT NULL DEFAULT 1,
+    reopen INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,7 +82,8 @@ CREATE INDEX IF NOT EXISTS idx_items_match ON items(match_id);
 DIAG_KEYS = ("reader_version", "branch", "owner_found", "relevancy_pawns", "pawns_seen", "owner_pawns", "chests_seen",
              "chest_searches_seen", "chests_opened_by_anyone", "aliased_classes", "special_chest_classes",
              "chest_classes_opened", "other_containers_searched", "chests_destroyed_unattributed", "partial",
-             "duration_s")
+             "duration_s", "unique_chests", "total_openings", "inferred_openings", "owner_pawn_ids",
+             "class_decisions", "decisions")
 
 
 @dataclass
@@ -88,6 +92,8 @@ class Stats:
     initial_chests: int = 0  # coffres ouverts avant Pirate Tracker (saisis par l'utilisateur)
     total_broken: int = 0
     total_special: int = 0
+    total_reopens: int = 0
+    unique_chests: int = 0  # coffres différents (un coffre rouvert ne compte qu'une fois ici)
     total_tokens: int = 0
     since_last_token: int = 0
     today_chests: int = 0
@@ -110,6 +116,8 @@ class MatchRow:
     chests: int
     broken: int
     special: int
+    reopens: int
+    unique_chests: int
     tokens: int
     placement: int | None
     total_players: int | None
@@ -148,7 +156,8 @@ class Database:
         self.conn.executescript(SCHEMA)
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(chest_events)")}
         for col, ddl in (("how", "TEXT NOT NULL DEFAULT 'ouvert'"), ("special", "INTEGER NOT NULL DEFAULT 0"),
-                         ("category", "TEXT NOT NULL DEFAULT 'standard'")):
+                         ("category", "TEXT NOT NULL DEFAULT 'standard'"), ("chest_id", "INTEGER"),
+                         ("direct", "INTEGER NOT NULL DEFAULT 1"), ("reopen", "INTEGER NOT NULL DEFAULT 0")):
             if col not in cols:  # bases créées avant l'ajout de « cassé / spécial / catégorie »
                 self.conn.execute(f"ALTER TABLE chest_events ADD COLUMN {col} {ddl}")
         self._recategorize_chests()
@@ -220,10 +229,12 @@ class Database:
             )
             mid = int(cur.lastrowid)
             self.conn.executemany(
-                "INSERT INTO chest_events(match_id, ts, t_in_match, kind, how, special, category) VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO chest_events(match_id, ts, t_in_match, kind, how, special, category, chest_id, direct, reopen)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
                 [(mid, started + float(c.get("t", 0)), float(c.get("t", 0)), c.get("kind", ""),
                   "cassé" if c.get("how") == "cassé" else "ouvert", 1 if chest_category(c.get("kind", ""))[1] else 0,
-                  chest_category(c.get("kind", ""))[0]) for c in chests],
+                  chest_category(c.get("kind", ""))[0], c.get("id"), 0 if c.get("direct") is False else 1,
+                  1 if c.get("reopen") else 0) for c in chests],
             )
             self.conn.executemany(
                 "INSERT INTO items(match_id, ts, item, count) VALUES (?,?,?,?)",
@@ -300,6 +311,10 @@ class Database:
             s.initial_chests = self.initial_chests
             s.total_broken = self._scalar("SELECT COUNT(*) FROM chest_events WHERE how='cassé'")
             s.total_special = self._scalar("SELECT COUNT(*) FROM chest_events WHERE special=1")
+            s.total_reopens = self._scalar("SELECT COUNT(*) FROM chest_events WHERE reopen=1")
+            # Coffres uniques : par partie, identifiant de coffre (les anciennes lignes sans identifiant comptent 1)
+            s.unique_chests = self._scalar(
+                "SELECT COUNT(*) FROM (SELECT DISTINCT match_id, COALESCE(chest_id, -id) FROM chest_events)")
             s.total_tokens = self._scalar("SELECT COUNT(*) FROM token_events")
             last = self.conn.execute("SELECT total_chests_at FROM token_events ORDER BY ts DESC LIMIT 1").fetchone()
             s.since_last_token = s.total_chests - (last["total_chests_at"] if last else 0)
@@ -331,7 +346,10 @@ class Database:
             rows = self.conn.execute(
                 """SELECT m.*, (SELECT COUNT(*) FROM token_events t WHERE t.match_id=m.id) AS tokens,
                           (SELECT COUNT(*) FROM chest_events c WHERE c.match_id=m.id AND c.how='cassé') AS broken,
-                          (SELECT COUNT(*) FROM chest_events c WHERE c.match_id=m.id AND c.special=1) AS special
+                          (SELECT COUNT(*) FROM chest_events c WHERE c.match_id=m.id AND c.special=1) AS special,
+                          (SELECT COUNT(*) FROM chest_events c WHERE c.match_id=m.id AND c.reopen=1) AS reopens,
+                          (SELECT COUNT(DISTINCT COALESCE(c.chest_id, -c.id)) FROM chest_events c WHERE c.match_id=m.id)
+                              AS unique_chests
                    FROM matches m ORDER BY m.started_at DESC LIMIT ?""",
                 (limit,),
             ).fetchall()
@@ -342,6 +360,7 @@ class Database:
             except json.JSONDecodeError:
                 warns = []
             out.append(MatchRow(r["id"], r["started_at"], r["duration"], r["chests"], r["broken"], r["special"],
+                                r["reopens"], r["unique_chests"],
                                 r["tokens"], r["placement"],
                                 r["total_players"], r["eliminations"], r["playlist"], bool(r["ok"]), r["error"],
                                 warns, r["replay_path"], json.loads(r["diagnostics"] or "{}")))

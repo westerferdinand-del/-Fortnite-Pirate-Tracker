@@ -69,6 +69,17 @@ def test_diagnostics_are_reported():
     assert res["warnings"] == []
 
 
+@needs_reader
+def test_unique_chests_and_openings_on_real_replay(tmp_path):
+    """Non-régression Chapitre 5 : 5 ouvertures = 5 coffres uniques, aucune déduite, journal écrit."""
+    res = replays.read_replay(SAMPLE)
+    assert (res["total_openings"], res["unique_chests"], res["inferred_openings"]) == (5, 5, 0)
+    assert all(c["direct"] and not c["reopen"] for c in res["chests"])
+    assert res["class_decisions"]["Tiered_Chest_Athena"].startswith("coffre")
+    assert res["class_decisions"]["Tiered_Ammo_Athena"].startswith("autre conteneur")
+    assert len(res["decisions"]) == 5 and all("COMPTÉ" in d for d in res["decisions"])
+
+
 @pytest.mark.skipif(not reader_available(), reason="lecteur de replays absent")
 def test_reader_selftest_refills_and_reopenings():
     """Scénarios simulés : réouverture d'un coffre rempli (même joueur ou autre), coffre déjà ouvert, cassé…"""
@@ -257,7 +268,9 @@ def test_diagnostic_text_for_a_real_match(tmp_path, monkeypatch):
         page.refresh()
         text = page.diagnostic_text(ctx.tracker.db.matches()[0])
         print(text)
-        assert "Coffres comptés : 5 (ouverts 3, cassés 2)" in text
+        assert "OUVERTURES COMPTÉES : 5  (coffres uniques : 5, réouvertures : 0, cassés : 2" in text
+        assert "Tiered_Ammo_Athena : autre conteneur" in text  # rôle de chaque classe, avec la preuve
+        assert "cassé par moi → COMPTÉ" in text and "ouverture par moi → COMPTÉ" in text  # journal par coffre
         assert "'Tiered_Chest_Athena': 5" in text
         assert "'Tiered_Ammo_Athena': 8" in text  # caisses de munitions : vues mais pas comptées
         assert "++Fortnite+Release-32.00" in text

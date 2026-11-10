@@ -1673,7 +1673,7 @@ public abstract class ReplayReader<T> where T : Replay, new()
             return false;
         }
 
-        if (!_netFieldParser.WillReadType(group.PathName))
+        if (!_netFieldParser.WillReadType(group)) // [PirateTracker] avec les propriétés du groupe
         {
             _logger?.LogInformation("Not reading type {}", group.PathName);
             Channels[channelIndex]!.IgnoreGroup(group.PathName);

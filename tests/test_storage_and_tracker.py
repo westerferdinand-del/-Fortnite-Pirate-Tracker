@@ -185,6 +185,22 @@ def test_old_wrong_special_flags_are_fixed_on_startup(tmp_path):
     db2.close()
 
 
+def test_unique_vs_openings_and_analysis_log(tracker, tmp_path, monkeypatch):
+    """Un coffre rouvert : +1 ouverture, pas +1 coffre unique. Le journal d'analyse est écrit."""
+    monkeypatch.setenv("PIRATE_TRACKER_HOME", str(tmp_path))
+    r = fake_result("C:/Demos/partie.replay", chests=3)
+    r["chests"][2]["id"] = r["chests"][1]["id"]  # même coffre rouvert
+    r["chests"][2]["reopen"] = True
+    r["decisions"] = ["01:00 coffre 1 [Tiered_Chest_Athena] ouverture par moi → COMPTÉ — test"]
+    tracker.record_match(r)
+    s = tracker.stats()
+    assert (s.total_chests, s.unique_chests, s.total_reopens) == (3, 2, 1)
+    m = tracker.db.matches()[0]
+    assert (m.chests, m.unique_chests, m.reopens) == (3, 2, 1)
+    log = (tmp_path / "logs" / "partie.txt").read_text(encoding="utf-8")
+    assert "OUVERTURES COMPTÉES : 3" in log and "COMPTÉ — test" in log
+
+
 def test_delete_match(tracker):
     tracker.record_match(fake_result("a.replay", chests=2))
     tracker.delete_match(tracker.db.matches()[0].id)

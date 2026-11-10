@@ -220,7 +220,10 @@ class OverviewPage(QWidget):
         st = tr.level()
         self.total.setText(fmt_int(s.total_chests))
         counted = s.total_chests - s.initial_chests
-        parts = [f"{fmt_int(counted)} comptés par Pirate Tracker"]
+        parts = [f"{fmt_int(counted)} ouvertures comptées par Pirate Tracker",
+                 f"{fmt_int(s.unique_chests)} coffres différents"]
+        if s.total_reopens:
+            parts.append(f"{fmt_int(s.total_reopens)} réouvertures")
         if s.initial_chests:
             parts.append(f"{fmt_int(s.initial_chests)} avant")
         if s.total_broken:
@@ -313,7 +316,7 @@ class MatchesPage(QWidget):
         self.detail.lay.addLayout(top)
         self.detail_metrics = QHBoxLayout()
         self.dm = {}
-        for k in ("Coffres", "Ouverts", "Cassés", "Spéciaux"):
+        for k in ("Ouvertures", "Coffres uniques", "Cassés", "Réouvertures", "Spéciaux"):
             m = Metric(k, big=20)
             self.dm[k] = m
             self.detail_metrics.addWidget(m)
@@ -374,9 +377,10 @@ class MatchesPage(QWidget):
         if m is None:
             return
         self.detail_title.setText(f"{playlist_name(m.playlist)} · {fmt_date(m.started_at)}")
-        self.dm["Coffres"].set(fmt_int(m.chests))
-        self.dm["Ouverts"].set(fmt_int(m.chests - m.broken))
+        self.dm["Ouvertures"].set(fmt_int(m.chests))
+        self.dm["Coffres uniques"].set(fmt_int(m.unique_chests))
         self.dm["Cassés"].set(fmt_int(m.broken))
+        self.dm["Réouvertures"].set(fmt_int(m.reopens))
         self.dm["Spéciaux"].set(fmt_int(m.special))
         types = self.ctx.tracker.db.match_chest_types(m.id)
         notes = []
@@ -400,27 +404,15 @@ class MatchesPage(QWidget):
             self.items.setItem(i, 3, cell(r["count"] or 1, NUM, color=T.TEXT2, tabular=True))
 
     def diagnostic_text(self, m) -> str:
-        """Résumé lisible de l'analyse d'une partie (à transmettre pour améliorer le comptage)."""
+        """Même contenu que le journal d'analyse : à coller dans un message pour améliorer le comptage."""
         from .. import __version__
+        from ..analysis_log import format_report
 
-        d = m.diagnostics or {}
-        lines = [f"Pirate Tracker v{__version__} · lecteur {d.get('reader_version', '?')}",
-                 f"Fortnite : {d.get('branch', '?')} · mode : {m.playlist or '?'} · durée : {fmt_duration(m.duration)}",
-                 f"Coffres comptés : {m.chests} (ouverts {m.chests - m.broken}, cassés {m.broken})",
-                 f"Coffres par classe : {d.get('chest_classes_opened') or '{}'}",
-                 f"Autres conteneurs fouillés (non comptés) : {d.get('other_containers_searched') or '{}'}",
-                 f"Coffres détruits sans auteur connu (non comptés) : {d.get('chests_destroyed_unattributed', '?')}",
-                 f"Joueur identifié : {d.get('owner_found')} · personnages : {d.get('owner_pawns')} / {d.get('pawns_seen')}"
-                 f" · suivi replay : {d.get('relevancy_pawns')}",
-                 f"Coffres vus dans la partie : {d.get('chests_seen')} · ouverts par quelqu'un : "
-                 f"{d.get('chests_opened_by_anyone')} · avec ouvreur connu : {d.get('chest_searches_seen')}",
-                 f"Classes reconnues automatiquement : {d.get('aliased_classes') or []}",
-                 f"Replay incomplet : {bool(d.get('partial'))} · analyse OK : {m.ok}"]
-        if m.warnings:
-            lines.append("Avertissements : " + " | ".join(m.warnings))
-        if m.error:
-            lines.append(f"Erreur : {m.error}")
-        return "\n".join(lines)
+        d = dict(m.diagnostics or {})
+        d.update(file=m.replay_path, playlist=m.playlist, duration_s=m.duration, ok=m.ok, error=m.error,
+                 warnings=m.warnings, total_openings=m.chests, unique_chests=m.unique_chests,
+                 broken_count=m.broken, reopen_count=m.reopens)
+        return format_report(d, f"v{__version__}")
 
     def _copy_diag(self):
         from PySide6.QtWidgets import QApplication

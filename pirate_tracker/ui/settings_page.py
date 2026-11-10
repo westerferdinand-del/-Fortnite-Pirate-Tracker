@@ -209,6 +209,11 @@ class SettingsPage(QWidget):
             btns.append(b)
         self._add(card, SettingRow("Sauvegarde", "Sauvegarde automatique toutes les 30 minutes et à la fermeture.",
                                    _row(*btns)))
+        logs = QPushButton("Ouvrir les journaux")
+        logs.setObjectName("ghost")
+        logs.clicked.connect(self._open_logs)
+        self._add(card, SettingRow("Journaux d'analyse", "Un fichier par partie : chaque coffre compté ou ignoré, "
+                                                         "et pourquoi.", logs))
         if sys.platform == "win32":
             auto = Toggle(ctx.autostart_enabled())
             auto.toggled.connect(ctx.set_autostart)
@@ -322,6 +327,11 @@ class SettingsPage(QWidget):
     def _open_dir(self):
         d = self.ctx.demos_dir()
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(d if d.exists() else d.parent)))
+
+    def _open_logs(self):
+        from ..analysis_log import logs_dir
+
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(logs_dir())))
 
     def _set_ov(self, key, value):
         self.ctx.config.set("overlay", key, value)

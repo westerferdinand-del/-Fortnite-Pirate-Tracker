@@ -17,7 +17,7 @@ using Unreal.Core.Contracts;
 using Unreal.Core.Models;
 using Unreal.Core.Models.Enums;
 
-const string Version = "1.2.0";
+const string Version = "1.3.0";
 
 var jsonOptions = new JsonSerializerOptions
 {
@@ -71,6 +71,10 @@ public class ChestOpen
     /// <summary>Coffre spécial : rare, enterré, de faction, de coffre-fort… (pas les coffres normaux de la saison).</summary>
     public bool Special { get; set; }
     public int? LootTier { get; set; }
+    /// <summary>true : le joueur est transmis avec l'ouverture ; false : déduit (dernier ouvreur connu du coffre).</summary>
+    public bool Direct { get; set; } = true;
+    /// <summary>Réouverture d'un coffre déjà ouvert (rempli à nouveau).</summary>
+    public bool Reopen { get; set; }
 }
 
 public class ItemPickup
@@ -103,6 +107,17 @@ public class MatchResult
     public List<ChestOpen> Chests { get; set; } = new();
     public List<ItemPickup> Items { get; set; } = new();
     public int ChestsSeen { get; set; }
+    /// <summary>Coffres différents ouverts ou cassés par le joueur.</summary>
+    public int UniqueChests { get; set; }
+    /// <summary>Total des ouvertures (réouvertures comprises ; un coffre cassé = 1).</summary>
+    public int TotalOpenings { get; set; }
+    /// <summary>Ouvertures dont l'ouvreur est déduit (non transmis dans la même mise à jour).</summary>
+    public int InferredOpenings { get; set; }
+    public List<uint> OwnerPawnIds { get; set; } = new();
+    /// <summary>Rôle attribué à chaque classe inconnue rencontrée, et pourquoi.</summary>
+    public Dictionary<string, string> ClassDecisions { get; set; } = new();
+    /// <summary>Journal des événements de coffres concernant le joueur (compté / ignoré, pourquoi).</summary>
+    public List<string> Decisions { get; set; } = new();
     /// <summary>Coffres détruits sans aucune ouverture connue (ni ouvreur, ni compteur) : peut-être cassés sans être attribués.</summary>
     public int ChestsDestroyedUnattributed { get; set; }
     /// <summary>Conteneurs NON comptés comme coffres que le joueur a fouillés (classe → nombre).</summary>
@@ -129,6 +144,10 @@ public class GenericChest : ExtraChest { }
 [NetFieldExportGroup(ChestReplayReader.GenericContainerPath, minimalParseMode: ParseMode.Normal)]
 public class GenericContainer : BaseContainer { }
 
+// Tout objet inconnu : lu avec les propriétés d'un conteneur ; son rôle dépend de ce qui est observé.
+[NetFieldExportGroup(ChestReplayReader.GenericProbePath, minimalParseMode: ParseMode.Normal)]
+public class GenericProbe : BaseContainer { }
+
 public class ChestReplayReader : FortniteReplayReader.ReplayReader
 {
     public const string StandardChestPath = "/Game/Building/ActorBlueprints/Containers/Tiered_Chest_Athena.Tiered_Chest_Athena_C";
@@ -138,8 +157,61 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
     private static readonly HashSet<string> AliasedPaths = new();
     private static readonly string[] ContainerWords = { "Container", "Cache", "Loot", "Stash", "Crate", "Coffer", "Safe" };
     public const string GenericContainerPath = "/PirateTracker/GenericContainer.GenericContainer_C";
+    public const string GenericProbePath = "/PirateTracker/GenericProbe.GenericProbe_C";
 
     /// <summary>Une classe inconnue est-elle un coffre ? (nom contenant « Chest », hors meubles et caisses de munitions)</summary>
+    /// <summary>Classes rencontrées et rôle attribué (coffre / autre conteneur / personnage) avec la raison.</summary>
+    private static readonly Dictionary<string, (string role, string reason)> ClassEvidence = new();
+
+    /// <summary>
+    /// Reconnaît une classe inconnue d'après les propriétés qu'elle réplique (preuve observée dans le
+    /// replay) : tout objet qui réplique SearchingPawn / bAlreadySearched / SearchAnimationCount est un
+    /// conteneur fouillable, quel que soit son nom. Parmi eux, seuls ceux nommés comme des coffres
+    /// (Chest / Treasure, hors meubles et caisses de munitions) sont comptés.
+    /// </summary>
+    public static string? AliasWithFields(string path, IReadOnlyCollection<string> fields)
+    {
+        // Les propriétés d'une classe ne sont déclarées dans le replay qu'au moment où elles sont
+        // transmises pour la première fois : à la première apparition d'un coffre, SearchingPawn n'est
+        // pas encore connu. On ne peut donc pas trier sur les propriétés à ce moment-là : tout objet
+        // inconnu est lu avec une description générique, et son rôle est décidé sur les données
+        // réellement observées pendant la partie (voir OnExportRead).
+        var name = path[(path.LastIndexOf('/') + 1)..];
+        if (name.Contains("ClassNetCache", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+        if (name.Contains("PlayerPawn", StringComparison.OrdinalIgnoreCase)
+            && !name.Contains("Component", StringComparison.OrdinalIgnoreCase))
+        {
+            lock (AliasedPaths)
+            {
+                AliasedPaths.Add(path);
+                ClassEvidence[path] = ("personnage", "nom de classe PlayerPawn");
+            }
+            return PlayerPawnPath;
+        }
+        if (IsChestName(path))
+        {
+            lock (AliasedPaths)
+            {
+                AliasedPaths.Add(path);
+            }
+            return GenericChestPath;
+        }
+        return GenericProbePath;
+    }
+
+    /// <summary>Nom de classe d'un coffre (et non d'un meuble, d'une caisse de munitions…).</summary>
+    public static bool IsChestName(string path)
+    {
+        var name = path[(path.LastIndexOf('/') + 1)..];
+        return (name.Contains("Chest", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("Treasure", StringComparison.OrdinalIgnoreCase))
+               && !path.Contains("/Props/", StringComparison.OrdinalIgnoreCase)
+               && !NotChestWords.Any(w => name.Contains(w, StringComparison.OrdinalIgnoreCase));
+    }
+
     public static string? ChestAlias(string path)
     {
         var name = path[(path.LastIndexOf('/') + 1)..];
@@ -181,7 +253,9 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
 
     private readonly Dictionary<uint, uint> _channelActor = new();
     internal readonly Dictionary<uint, uint> _pawnToPlayerState = new();
-    internal readonly List<(float t, uint chest, string path, uint pawn, bool broken)> _opens = new();
+    internal readonly List<(float t, uint chest, string path, uint pawn, bool broken, bool direct, bool reopen)> _opens = new();
+    /// <summary>Journal : chaque événement de coffre et la décision prise (compté ou ignoré, pourquoi).</summary>
+    internal readonly List<(float t, uint chest, string path, string evt, uint pawn, string note)> _log = new();
     private readonly List<(string path, uint pawn)> _otherSearches = new();
     private readonly HashSet<(uint, uint)> _otherSearchKeys = new();
     private uint? _recorderId;
@@ -206,9 +280,11 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
     public static MatchResult Analyze(string path)
     {
         Unreal.Core.NetFieldParser.PathAlias = ChestAlias;
+        Unreal.Core.NetFieldParser.PathAliasWithFields = AliasWithFields;
         lock (AliasedPaths)
         {
             AliasedPaths.Clear();
+            ClassEvidence.Clear();
         }
         var reader = new ChestReplayReader();
         FortniteReplayReader.Models.FortniteReplay? replay = null;
@@ -273,6 +349,13 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
 
             // Coffres uniquement (les caisses de munitions et autres conteneurs sont ignorés)
             case BaseContainer other when other is not (Chest or FactionChest or ExtraChest):
+                if (other is GenericProbe && !(other.SearchingPawn > 0 || other.SearchAnimationCount > 0
+                                               || other.bAlreadySearched.HasValue))
+                {
+                    break;  // objet inconnu sans aucune donnée de conteneur : ignoré
+                }
+                NoteEvidence(CurrentExportPath, "autre conteneur",
+                             "données de fouille observées, nom non reconnu comme coffre : NON compté");
                 // Conteneur qui n'est pas un coffre : on note qui le fouille (diagnostic)
                 if (other.SearchingPawn is uint sp && sp != 0 && _otherSearchKeys.Add((actor, sp)))
                 {
@@ -287,6 +370,12 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
                 if (chest.ReplicatedLootTier > 0)
                 {
                     _lootTier[actor] = chest.ReplicatedLootTier;
+                }
+                if (chest.SearchingPawn > 0 || chest.SearchAnimationCount > 0 || chest.bAlreadySearched.HasValue)
+                {
+                    NoteEvidence(classPath, "coffre", chest is GenericChest
+                        ? "classe inconnue : nom de coffre + données de fouille observées : compté"
+                        : "classe de coffre connue : compté");
                 }
                 RecordChestUpdate(actor, classPath, chest);
                 break;
@@ -308,6 +397,18 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
         }
     }
 
+    private static void NoteEvidence(string? path, string role, string reason)
+    {
+        if (path == null)
+        {
+            return;
+        }
+        lock (AliasedPaths)
+        {
+            ClassEvidence.TryAdd(path, (role, reason));
+        }
+    }
+
     // État par coffre : dernier compteur d'ouvertures vu, dernier joueur qui l'a fouillé.
     private readonly Dictionary<uint, uint> _chestAnim = new();
     private readonly Dictionary<uint, uint> _chestPawn = new();
@@ -315,6 +416,8 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
     private readonly Dictionary<uint, float> _animWithoutPawnAt = new();
     private readonly HashSet<uint> _hasOpening = new();
     private readonly HashSet<uint> _chestsDestroyed = new();
+    private readonly HashSet<uint> _loggedDestroy = new();
+
 
     /// <summary>
     /// Détecte chaque ouverture d'un coffre, y compris les réouvertures (les coffres se remplissent
@@ -359,6 +462,8 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
                 if (!pawn.HasValue)
                 {
                     _animWithoutPawnAt[actor] = CurrentTime;
+                    _log.Add((CurrentTime, actor, classPath, "déjà ouvert", 0,
+                              "ignoré : déjà ouvert quand il est devenu visible (ouvreur inconnu)"));
                 }
                 _chestAnim[actor] = anim;
             }
@@ -377,20 +482,40 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
         {
             for (var i = 0; i < opens; i++)
             {
-                _opens.Add((CurrentTime, actor, classPath, who, broken));
+                var reopen = _hasOpening.Contains(actor) || i > 0;
+                _opens.Add((CurrentTime, actor, classPath, who, broken && i == 0, pawn.HasValue, reopen));
+                _log.Add((CurrentTime, actor, classPath, broken ? "cassé" : (reopen ? "réouverture" : "ouverture"), who,
+                          pawn.HasValue ? "joueur transmis avec l'ouverture" : "joueur déduit (dernier ouvreur connu)"));
+                _hasOpening.Add(actor);
             }
-            _hasOpening.Add(actor);
             _animWithoutPawnAt.Remove(actor);
         }
+        else if (opens > 0)
+        {
+            _log.Add((CurrentTime, actor, classPath, "ouverture", 0, "ignorée : ouvreur inconnu"));
+        }
+        else if (broken && _hasOpening.Contains(actor) && _loggedDestroy.Add(actor))
+        {
+            _log.Add((CurrentTime, actor, classPath, "détruit", pawn ?? 0,
+                      "ignoré : coffre déjà ouvert (pas de double comptage)"));
+        }
+
     }
 
-    /// <summary>Scénarios simulés de mises à jour de coffres (exécutés par les tests et la CI).</summary>
+    /// <summary>
+    /// Scénarios simulés (exécutés par les tests et la CI). Chaque scénario rejoue une suite de mises à
+    /// jour répliquées d'un ou plusieurs coffres et vérifie : ouvertures du joueur, coffres uniques,
+    /// coffres cassés. ME et ME2 sont deux personnages du même joueur (réapparition / relance).
+    /// </summary>
     public static int SelfTest()
     {
-        const uint ME = 100, OTHER = 200;
-        var failures = new List<string>();
-        void Check(string name, IEnumerable<(float t, uint chest, uint? pawn, uint anim, bool destroyed)> updates,
-                   int expectedMine, int expectedBroken = 0)
+        const uint ME = 100, ME2 = 101, OTHER = 200, OTHER2 = 201;
+        var owner = new HashSet<uint> { ME, ME2 };
+        var lines = new List<string>();
+        var failures = 0;
+
+        void Check(string name, (float t, uint chest, uint? pawn, uint anim, bool destroyed)[] updates,
+                   int openings, int unique, int broken = 0)
         {
             var r = new ChestReplayReader();
             foreach (var u in updates)
@@ -399,30 +524,83 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
                 var c = new GenericChest { SearchingPawn = u.pawn, SearchAnimationCount = u.anim, bDestroyed = u.destroyed };
                 r.RecordChestUpdate(u.chest, StandardChestPath, c);
             }
-            var mine = r._opens.Where(o => o.pawn == ME).ToList();
-            if (mine.Count != expectedMine || mine.Count(o => o.broken) != expectedBroken)
-            {
-                failures.Add($"{name}: {mine.Count} ouvertures ({mine.Count(o => o.broken)} cassées), attendu {expectedMine} ({expectedBroken})");
-            }
+            var mine = r._opens.Where(o => owner.Contains(o.pawn)).ToList();
+            var got = (mine.Count, mine.Select(o => o.chest).Distinct().Count(), mine.Count(o => o.broken));
+            var ok = got == (openings, unique, broken);
+            failures += ok ? 0 : 1;
+            lines.Add($"{(ok ? "OK   " : "ÉCHEC")} {name} : attendu {openings} ouv./{unique} uniques/{broken} cassés, "
+                      + $"obtenu {got.Item1}/{got.Item2}/{got.Item3}");
         }
-        Check("ouverture simple", new[] { (10f, 1u, (uint?)ME, 1u, false) }, 1);
-        Check("même mise à jour répétée", new[] { (10f, 1u, (uint?)ME, 1u, false), (11f, 1u, (uint?)null, 1u, false) }, 1);
-        Check("rempli puis rouvert par moi", new[] { (10f, 1u, (uint?)ME, 1u, false), (100f, 1u, (uint?)null, 2u, false) }, 2);
+
+        Check("coffre ouvert une fois", new[] { (10f, 1u, (uint?)ME, 1u, false) }, 1, 1);
+        Check("plusieurs coffres ouverts", new[] { (10f, 1u, (uint?)ME, 1u, false), (20f, 2u, (uint?)ME, 1u, false),
+                                                  (30f, 3u, (uint?)ME, 1u, false) }, 3, 3);
+        Check("même mise à jour répétée (pas de double)", new[] { (10f, 1u, (uint?)ME, 1u, false),
+                                                                 (11f, 1u, (uint?)null, 1u, false) }, 1, 1);
+        Check("rouvert après remplissage (même joueur)", new[] { (10f, 1u, (uint?)ME, 1u, false),
+                                                                (100f, 1u, (uint?)null, 2u, false) }, 2, 1);
         Check("rouvert 3 fois", new[] { (10f, 1u, (uint?)ME, 1u, false), (100f, 1u, (uint?)null, 2u, false),
-                                        (200f, 1u, (uint?)null, 3u, false) }, 3);
-        Check("rouvert par un autre", new[] { (10f, 1u, (uint?)ME, 1u, false), (100f, 1u, (uint?)OTHER, 2u, false) }, 1);
-        Check("ouvert par un autre puis par moi", new[] { (10f, 1u, (uint?)OTHER, 1u, false), (100f, 1u, (uint?)ME, 2u, false) }, 1);
-        Check("déjà ouvert avant d'être visible", new[] { (10f, 1u, (uint?)null, 1u, false) }, 0);
-        Check("joueur transmis juste après", new[] { (10f, 1u, (uint?)null, 1u, false), (10.5f, 1u, (uint?)ME, 0u, false) }, 1);
-        Check("joueur transmis bien plus tard", new[] { (10f, 1u, (uint?)null, 1u, false), (60f, 1u, (uint?)ME, 0u, false) }, 0);
-        Check("cassé", new[] { (10f, 1u, (uint?)ME, 1u, true) }, 1, 1);
-        Check("deux coffres", new[] { (10f, 1u, (uint?)ME, 1u, false), (20f, 2u, (uint?)ME, 1u, false) }, 2);
-        foreach (var f in failures)
+                                        (200f, 1u, (uint?)null, 3u, false) }, 3, 1);
+        Check("cassé directement", new[] { (10f, 1u, (uint?)ME, 1u, true) }, 1, 1, 1);
+        Check("ouvert puis cassé (compté une fois, comme ouvert)", new[] { (10f, 1u, (uint?)ME, 1u, false),
+                                                                          (50f, 1u, (uint?)ME, 1u, true) }, 1, 1, 0);
+        Check("ouvert par moi puis cassé par un autre", new[] { (10f, 1u, (uint?)ME, 1u, false),
+                                                               (50f, 1u, (uint?)OTHER, 1u, true) }, 1, 1, 0);
+        Check("ouvert par un adversaire", new[] { (10f, 1u, (uint?)OTHER, 1u, false) }, 0, 0);
+        Check("cassé par un adversaire", new[] { (10f, 1u, (uint?)OTHER, 1u, true) }, 0, 0);
+        Check("rouvert par un autre après moi", new[] { (10f, 1u, (uint?)ME, 1u, false),
+                                                       (100f, 1u, (uint?)OTHER, 2u, false) }, 1, 1);
+        Check("ouvert par un autre puis rouvert par moi", new[] { (10f, 1u, (uint?)OTHER, 1u, false),
+                                                                 (100f, 1u, (uint?)ME, 2u, false) }, 1, 1);
+        Check("plusieurs joueurs, plusieurs coffres", new[] { (10f, 1u, (uint?)OTHER, 1u, false),
+            (12f, 2u, (uint?)ME, 1u, false), (15f, 3u, (uint?)OTHER2, 1u, false), (20f, 4u, (uint?)ME, 1u, true),
+            (30f, 5u, (uint?)OTHER, 1u, true) }, 2, 2, 1);
+        Check("changement de personnage (réapparition)", new[] { (10f, 1u, (uint?)ME, 1u, false),
+                                                                (400f, 2u, (uint?)ME2, 1u, false) }, 2, 2);
+        Check("déjà ouvert avant d'être visible", new[] { (10f, 1u, (uint?)null, 1u, false) }, 0, 0);
+        Check("ouvreur transmis juste après le compteur", new[] { (10f, 1u, (uint?)null, 1u, false),
+                                                                 (10.5f, 1u, (uint?)ME, 0u, false) }, 1, 1);
+        Check("ouvreur transmis bien plus tard (ignoré)", new[] { (10f, 1u, (uint?)null, 1u, false),
+                                                                 (60f, 1u, (uint?)ME, 0u, false) }, 0, 0);
+
+        // Classification des classes (noms)
+        void Class(string path, string expected)
         {
-            Console.Error.WriteLine("ÉCHEC " + f);
+            var target = AliasWithFields(path, Array.Empty<string>());
+            var got = target == GenericChestPath ? "coffre" : target == PlayerPawnPath ? "personnage"
+                    : target == GenericProbePath ? "inconnu (décidé sur les données)" : "ignoré";
+            var ok = got == expected;
+            failures += ok ? 0 : 1;
+            lines.Add($"{(ok ? "OK   " : "ÉCHEC")} classe {path[(path.LastIndexOf('/') + 1)..]} : attendu {expected}, obtenu {got}");
         }
-        Console.WriteLine(failures.Count == 0 ? "selftest OK (11 scénarios)" : $"selftest : {failures.Count} échec(s)");
-        return failures.Count == 0 ? 0 : 1;
+        Class("/Game/Building/ActorBlueprints/Containers/Tiered_Chest_Athena_New.Tiered_Chest_Athena_New_C", "coffre");
+        Class("/TreasureHunters/Containers/B_TreasureHunt_Chest.B_TreasureHunt_Chest_C", "coffre");
+        Class("/Game/Building/ActorBlueprints/Containers/Tiered_Ammo_Athena2.Tiered_Ammo_Athena2_C", "inconnu (décidé sur les données)");
+        Class("/Game/Athena/BuildingActors/Props/Building/ActorBlueprints/Containers/Athena_Prop_Bedroom_HopeChest_03.Athena_Prop_Bedroom_HopeChest_03_C", "inconnu (décidé sur les données)");
+        Class("/Game/Athena/PlayerPawn_Athena_Ch7.PlayerPawn_Athena_Ch7_C", "personnage");
+        Class("FortGameStateComponent_Reboot_ClassNetCache", "ignoré");
+
+        var cats = new (string kind, string cat, bool special)[]
+        {
+            ("Tiered_Chest_Athena", "standard", false), ("B_TreasureHunt_Chest", "trésor", false),
+            ("Tiered_Chest_Rare_Athena", "rare", true), ("BuriedChest", "enterré", true),
+            ("Tiered_Chest_Athena_FactionChest_NoLocks", "faction", true),
+        };
+        foreach (var (kind, cat, special) in cats)
+        {
+            var got = ChestCategory(kind);
+            var ok = got == (cat, special);
+            failures += ok ? 0 : 1;
+            lines.Add($"{(ok ? "OK   " : "ÉCHEC")} catégorie {kind} : attendu {cat}/{(special ? "spécial" : "normal")}, "
+                      + $"obtenu {got.category}/{(got.special ? "spécial" : "normal")}");
+        }
+
+        foreach (var l in lines)
+        {
+            Console.WriteLine(l);
+        }
+        Console.WriteLine(failures == 0 ? $"selftest OK ({lines.Count} vérifications)" : $"selftest : {failures} échec(s)");
+        return failures == 0 ? 0 : 1;
     }
 
     /// <summary>Catégorie lisible d'un coffre d'après le nom de sa classe.</summary>
@@ -510,8 +688,32 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
                     Category = ChestCategory(o.path).category,
                     Special = ChestCategory(o.path).special,
                     LootTier = _lootTier.TryGetValue(o.chest, out var tier) ? tier : null,
+                    Direct = o.direct,
+                    Reopen = o.reopen,
                 });
             }
+        }
+
+        result.TotalOpenings = result.Chests.Count;
+        result.UniqueChests = result.Chests.Select(c => c.Id).Distinct().Count();
+        result.InferredOpenings = result.Chests.Count(c => !c.Direct);
+        result.OwnerPawnIds = ownerPawns.OrderBy(x => x).ToList();
+        lock (AliasedPaths)
+        {
+            result.ClassDecisions = ClassEvidence.ToDictionary(kv => kv.Key[(kv.Key.LastIndexOf('/') + 1)..].Split('.')[0],
+                                                               kv => $"{kv.Value.role} ({kv.Value.reason})");
+        }
+        var ownerChests = result.Chests.Select(c => c.Id).ToHashSet();
+        foreach (var e in _log.Where(e => ownerPawns.Contains(e.pawn) || ownerChests.Contains(e.chest)).OrderBy(e => e.t).Take(400))
+        {
+            var who = e.pawn == 0 ? "inconnu" : ownerPawns.Contains(e.pawn) ? "moi" : $"autre joueur ({e.pawn})";
+            var counted = ownerPawns.Contains(e.pawn) && !e.note.StartsWith("ignoré") ? "COMPTÉ" : "ignoré";
+            result.Decisions.Add($"{(int)e.t / 60:00}:{(int)e.t % 60:00} coffre {e.chest} [{e.path[(e.path.LastIndexOf('/') + 1)..].Split('.')[0]}] "
+                                 + $"{e.evt} par {who} → {counted} — {e.note}");
+        }
+        if (result.InferredOpenings > 0)
+        {
+            result.Warnings.Add($"{result.InferredOpenings} ouverture(s) attribuée(s) par déduction (dernier ouvreur connu du coffre).");
         }
 
         if (result.Chests.Count == 0 && result.ChestSearchesSeen > 0 && _pickedUp.All(p => !ownerPawns.Contains(p.pawn))

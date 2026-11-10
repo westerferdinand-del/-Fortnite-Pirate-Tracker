@@ -254,6 +254,33 @@ public class NetFieldParser
 
     private readonly HashSet<string> _noAlias = new();
 
+    /// <summary>
+    /// [PirateTracker] Variante de <see cref="PathAlias"/> qui reçoit aussi les noms des propriétés
+    /// répliquées par la classe : permet de reconnaître un type d'objet par ses propriétés (preuve
+    /// observée dans le replay) plutôt que par son nom.
+    /// </summary>
+    public static Func<string, IReadOnlyCollection<string>, string?>? PathAliasWithFields { get; set; }
+
+    /// <summary>[PirateTracker] Comme <see cref="WillReadType(string)"/>, avec les propriétés du groupe.</summary>
+    public bool WillReadType(NetFieldExportGroup group)
+    {
+        if (NetFieldGroups.TryGetValue(group.PathName, out var _))
+        {
+            return true;
+        }
+        if (PathAliasWithFields != null && !_noAlias.Contains(group.PathName))
+        {
+            var names = group.NetFieldExports?.Where(e => e != null).Select(e => e!.Name).ToArray() ?? Array.Empty<string>();
+            var target = PathAliasWithFields(group.PathName, names);
+            if (target != null && target != group.PathName && NetFieldGroups.TryGetValue(target, out var info))
+            {
+                NetFieldGroups.Add(group.PathName, info);
+                return true;
+            }
+        }
+        return ResolveAlias(group.PathName);
+    }
+
     private bool ResolveAlias(string path)
     {
         if (PathAlias == null || _noAlias.Contains(path))
