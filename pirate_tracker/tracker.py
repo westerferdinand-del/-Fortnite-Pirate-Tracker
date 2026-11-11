@@ -142,5 +142,12 @@ class Tracker:
     def stats(self):
         return self.db.stats()
 
+    def odds(self):
+        from .odds import token_odds
+
+        s = self.db.stats()
+        # Toutes les ouvertures comptent, y compris celles d'avant l'installation (saisies par l'utilisateur)
+        return token_odds(s.total_chests, int(self.config.get("token", "one_in", 137500) or 137500))
+
     def level(self) -> levels.LevelState:
         return levels.compute_level(self.db.total_chests(), self.thresholds)

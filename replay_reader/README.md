@@ -73,6 +73,20 @@ du Chapitre 5 en non-régression.
 remplissage, destruction). Le diagnostic de l'application (Parties → Copier le diagnostic) et les
 journaux (`%APPDATA%\PirateTracker\logs`) donnent ces informations à partir d'une vraie partie.
 
+**Signaux étudiés puis écartés (v3, mesurés sur le replay réel)**
+- Butin qui apparaît (`FortPickup.LootInitialPosition`, `bTossedFromContainer`) : `bTossedFromContainer`
+  n'est jamais renseigné (0 sur 2 645 objets) ; 3 des 5 ouvertures n'ont aucun objet apparu dans les
+  2,5 s, et de nombreuses « rafales » d'objets près du joueur ne viennent d'aucun coffre (butin de
+  joueurs éliminés). Trop bruité pour compter.
+- Position du coffre : absente du replay (0 sur 92 coffres ; ce sont des objets de la carte).
+- Comptage en direct pendant la partie : impossible. Un replay en cours est chiffré et sa clé n'est
+  écrite qu'à la fin (`IsLive` + `IsEncrypted` sans clé ; la bibliothèque le refuse).
+
+**En-tête du replay** (`pirate_tracker/replay_header.py`) : quelques octets lus sans décompression
+donnent `IsLive` et la présence de la clé. Un replay en cours n'est jamais lu (corrige un faux
+« échec » quand Fortnite cessait d'écrire 30 s en pleine partie) ; un replay terminé est lu 3 s
+après sa dernière écriture au lieu de 30 s.
+
 Limite : les replays très anciens (2020, v11) ne contiennent pas `SearchingPawn` → aucun coffre
 compté, avec un avertissement.
 

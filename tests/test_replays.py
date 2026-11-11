@@ -276,3 +276,69 @@ def test_diagnostic_text_for_a_real_match(tmp_path, monkeypatch):
         assert "++Fortnite+Release-32.00" in text
     finally:
         ctx.quit()
+
+
+# ---------------------------------------------------------------- en-tête (fin de partie immédiate)
+def make_live_copy(src: Path, dst: Path) -> None:
+    """Copie du vrai replay telle qu'elle est PENDANT la partie : « en direct » et sans clé de chiffrement."""
+    import struct
+
+    data = bytearray(src.read_bytes())
+    pos = 8
+    count = struct.unpack_from("<i", data, pos)[0]
+    pos += 4 + count * 20 + 12
+    n = struct.unpack_from("<i", data, pos)[0]
+    pos += 4 + (n if n >= 0 else -2 * n)
+    struct.pack_into("<I", data, pos, 1)  # bIsLive = 1
+    key_size_pos = pos + 4 + 8 + 4 + 4
+    size = struct.unpack_from("<I", data, key_size_pos)[0]
+    struct.pack_into("<I", data, key_size_pos, 0)  # pas encore de clé
+    del data[key_size_pos + 4:key_size_pos + 4 + size]
+    dst.write_bytes(bytes(data))
+
+
+@pytest.mark.skipif(not SAMPLE.exists(), reason="replay d'exemple absent")
+def test_header_of_real_replay(tmp_path):
+    from pirate_tracker.replay_header import read_header
+
+    h = read_header(SAMPLE)
+    assert (h.length_ms, h.is_live, h.is_encrypted, h.has_key, h.finished) == (900374, False, True, True, True)
+    live = tmp_path / "live.replay"
+    make_live_copy(SAMPLE, live)
+    hl = read_header(live)
+    assert hl.is_live and not hl.has_key and not hl.finished
+    assert read_header(tmp_path / "absent.replay") is None
+    (tmp_path / "bad.replay").write_bytes(b"\x00" * 50)
+    assert read_header(tmp_path / "bad.replay") is None
+
+
+@needs_reader
+def test_recording_replay_is_never_read_nor_counted_as_failure(tmp_path):
+    """Bug corrigé : un replay en cours (fichier immobile 30 s en pleine partie) donnait un faux « échec »."""
+    demos = tmp_path / "Demos"
+    demos.mkdir()
+    live = demos / "UnsavedReplay-live.replay"
+    make_live_copy(SAMPLE, live)
+    calls = []
+    w = make_watcher(demos, {}, [], lambda ps: calls.append(ps) or [])
+    st = live.stat()
+    for dt in (1, 40, 120, 600):
+        assert w.scan(st.st_mtime + dt) == []
+    assert calls == [] and w.status.recording == [live.name]
+    assert "Partie en cours" in w.status.message
+
+
+@needs_reader
+def test_finished_replay_is_read_within_seconds(tmp_path):
+    """En-tête « terminé » : lecture 3 s après la dernière écriture (au lieu de 30 s)."""
+    demos = tmp_path / "Demos"
+    demos.mkdir()
+    dst = demos / "UnsavedReplay-fin.replay"
+    shutil.copy(SAMPLE, dst)
+    st = dst.stat()
+    results = []
+    w = replays.ReplayWatcher(lambda: demos, lambda *a: False, results.append, stable_seconds=30)
+    w.scan(st.st_mtime + 0.5)
+    assert results == []
+    w.scan(st.st_mtime + 4)
+    assert len(results) == 1 and len(results[0]["chests"]) == 5

@@ -381,3 +381,153 @@ class StatusDot(QWidget):
 
 # Ancien nom
 StatusPill = StatusDot
+
+
+# ---------------------------------------------------------------- v3
+class LiveChip(QWidget):
+    """« Partie en cours » (point qui pulse) ou « Prêt »."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.live = False
+        self.setFixedHeight(26)
+        self.setMinimumWidth(150)
+        self._t0 = time.monotonic()
+        self._timer = QTimer(self, interval=60, timeout=self.update)
+        self._timer.start()
+
+    def set_live(self, live: bool) -> None:
+        self.live = live
+        self.setToolTip("Fortnite enregistre la partie : le compteur sera mis à jour dès la fin de la partie."
+                        if live else "En attente de la prochaine partie.")
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        text = "Partie en cours" if self.live else "Prêt"
+        f = T.font(12, QFont.Medium)
+        p.setFont(f)
+        w = p.fontMetrics().horizontalAdvance(text) + 34
+        r = QRectF(self.width() - w, 0, w, self.height())
+        p.setPen(QPen(QColor(T.BORDER2), 1))
+        p.setBrush(QColor(T.SURFACE))
+        p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), r.height() / 2, r.height() / 2)
+        col = QColor(T.GREEN if self.live else T.MUTED)
+        c = QPointF(r.x() + 14, r.center().y())
+        if self.live:
+            k = (time.monotonic() - self._t0) % 1.6 / 1.6
+            halo = QColor(col)
+            halo.setAlphaF(0.4 * (1 - k))
+            p.setPen(Qt.NoPen)
+            p.setBrush(halo)
+            p.drawEllipse(c, 3 + 5 * k, 3 + 5 * k)
+        p.setPen(Qt.NoPen)
+        p.setBrush(col)
+        p.drawEllipse(c, 3.2, 3.2)
+        p.setPen(QColor(T.TEXT if self.live else T.TEXT2))
+        p.drawText(r.adjusted(24, 0, -10, 0), Qt.AlignVCenter | Qt.AlignLeft, text)
+        p.end()
+
+
+class MatchTimeline(QWidget):
+    """Frise d'une partie : chaque coffre à l'instant où il a été ouvert, rouvert ou cassé."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.duration = 0.0
+        self.events: list[dict] = []
+        self.setMinimumHeight(64)
+        self.setMouseTracking(True)
+        self._hover: int = -1
+
+    def set_data(self, duration: float, events: list[dict]) -> None:
+        self.duration = max(duration, max((e["t"] for e in events), default=0) + 5)
+        self.events = events
+        self._hover = -1
+        self.update()
+
+    def _x(self, t: float) -> float:
+        return 12 + (self.width() - 24) * (t / self.duration if self.duration else 0)
+
+    def mouseMoveEvent(self, e):
+        best, bd = -1, 10.0
+        for i, ev in enumerate(self.events):
+            d = abs(self._x(ev["t"]) - e.position().x())
+            if d < bd:
+                best, bd = i, d
+        if best != self._hover:
+            self._hover = best
+            if best >= 0:
+                ev = self.events[best]
+                kind = "cassé" if ev["how"] == "cassé" else ("rouvert" if ev["reopen"] else "ouvert")
+                self.setToolTip(f"{int(ev['t'] // 60):02d}:{int(ev['t'] % 60):02d} · coffre {kind}")
+            else:
+                self.setToolTip("")
+            self.update()
+
+    def leaveEvent(self, _):
+        self._hover = -1
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        y = 24.0
+        p.setPen(QPen(QColor(T.BORDER2), 2, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(QPointF(12, y), QPointF(self.width() - 12, y))
+        p.setFont(T.font(11))
+        step = 300 if self.duration <= 1800 else 600
+        for t in range(0, int(self.duration) + 1, step):
+            x = self._x(t)
+            p.setPen(QPen(QColor(T.BORDER2), 1))
+            p.drawLine(QPointF(x, y + 6), QPointF(x, y + 10))
+            p.setPen(QColor(T.MUTED))
+            if t == 0:
+                p.drawText(QRectF(x - 2, y + 12, 60, 16), Qt.AlignLeft | Qt.AlignVCenter, "0 min")
+            else:
+                p.drawText(QRectF(x - 30, y + 12, 60, 16), Qt.AlignCenter, f"{t // 60} min")
+        for i, ev in enumerate(self.events):
+            x = self._x(ev["t"])
+            hot = i == self._hover
+            r = 6.5 if hot else 5.0
+            if ev["how"] == "cassé":
+                p.setPen(QPen(QColor(T.ORANGE), 2))
+                p.setBrush(QColor(T.SURFACE))
+                p.save()
+                p.translate(x, y)
+                p.rotate(45)
+                p.drawRect(QRectF(-r * 0.8, -r * 0.8, r * 1.6, r * 1.6))
+                p.restore()
+            elif ev["reopen"]:
+                p.setPen(QPen(QColor(T.ACCENT), 2))
+                p.setBrush(QColor(T.SURFACE))
+                p.drawEllipse(QPointF(x, y), r, r)
+            else:
+                p.setPen(QPen(QColor(T.SURFACE), 2))
+                p.setBrush(QColor(T.ACCENT))
+                p.drawEllipse(QPointF(x, y), r, r)
+        if not self.events:
+            p.setPen(QColor(T.MUTED))
+            p.setFont(T.font(12))
+            p.drawText(QRectF(0, 0, self.width(), 18), Qt.AlignCenter, "Aucun coffre dans cette partie")
+        p.end()
+
+
+def animate_number(label: QLabel, new_value: int, fmt=None, duration_ms: int = 900) -> None:
+    """Fait défiler le nombre affiché jusqu'à sa nouvelle valeur (effet discret quand le total augmente)."""
+    from PySide6.QtCore import QEasingCurve, QVariantAnimation
+
+    fmt = fmt or fmt_int
+    old = label.property("value")
+    label.setProperty("value", new_value)
+    if old is None or old == new_value or not label.isVisible():
+        label.setText(fmt(new_value))
+        return
+    anim = QVariantAnimation(label)
+    anim.setStartValue(int(old))
+    anim.setEndValue(int(new_value))
+    anim.setDuration(duration_ms)
+    anim.setEasingCurve(QEasingCurve.OutCubic)
+    anim.valueChanged.connect(lambda v: label.setText(fmt(int(v))))
+    anim.start(QVariantAnimation.DeleteWhenStopped)

@@ -22,6 +22,8 @@ DEFAULTS: dict[str, Any] = {
         "patterns": [r"pirate.*(token|coin|doubloon|medal|jeton)", r"(token|coin|doubloon|medal|jeton).*pirate"],
         # Noms internes exacts désignés par l'utilisateur dans la page Récompenses
         "items": [],
+        # Taux publié par Epic : 1 chance sur N par coffre (partie normale, hors Treasure Hours)
+        "one_in": 137500,
     },
     # Application mobile : page servie sur le réseau local (désactivée par défaut)
     "companion": {

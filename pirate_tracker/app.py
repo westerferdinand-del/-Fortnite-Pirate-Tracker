@@ -150,6 +150,7 @@ class AppContext:
     def _on_status(self, status):
         self.overlay.set_status(status.level)
         self.window.set_status(status.level, status.message)
+        self.window.pages["overview"].live.set_live(bool(status.recording))
         self.window.pages["settings"].set_status(status)
         self.tray.setToolTip(f"{APP_NAME} — {status.message}")
         if self.window.stack.currentWidget() is self.window.pages["settings"]:
@@ -255,7 +256,8 @@ class AppContext:
         if not on:
             return True
         self.companion = CompanionServer(self.tracker, self.companion_token(),
-                                         int(self.config.get("companion", "port", 8765)))
+                                         int(self.config.get("companion", "port", 8765)),
+                                         recording=lambda: bool(self.watcher.status.recording))
         return self.companion.start()
 
     # ------------------------------------------------------------------ autostart (Windows)

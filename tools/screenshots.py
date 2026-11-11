@@ -68,6 +68,8 @@ def main(out: str):
     app.setStyleSheet(T.STYLESHEET)
     ctx = AppContext(app, start_watcher=False)
     ctx.tracker.import_results(demo_results())
+    ctx.tracker.set_initial_chests(2500)
+    ctx.watcher.status.recording = ["UnsavedReplay-en-cours.replay"]  # aperçu de l'indicateur « Partie en cours »
     ctx.window.resize(1360, 940)
     ctx.window.show()
     for key in ctx.window.pages:

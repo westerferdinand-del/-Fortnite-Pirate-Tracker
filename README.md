@@ -73,6 +73,14 @@ Garde-fous contre les erreurs de comptage :
 
 Pendant que vous jouez, l'application ne fait rien d'autre qu'attendre, donc elle ne consomme rien.
 
+### Vos chances pour le jeton pirate
+
+La vue d'ensemble (et l'application mobile) calcule la probabilité d'avoir déjà obtenu le jeton
+avec vos ouvertures, d'après le taux publié par Epic : 1 chance sur 137 500 par coffre en partie
+normale (modifiable dans Réglages). Chaque coffre est un tirage indépendant : la probabilité
+cumulée dit seulement à quel point il était probable d'en avoir eu au moins un. 1 chance sur 2 est
+atteinte à 95 308 ouvertures.
+
 ### Le jeton pirate
 
 Le nom interne exact de l'objet « jeton pirate » dans les fichiers du jeu n'était pas connu pendant

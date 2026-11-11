@@ -244,6 +244,15 @@ class Database:
         return {"match_id": mid, "chests": len(chests), "delta": len(chests) - old_chests,
                 "items": items, "replaced": bool(old), "started_at": started}
 
+    def match_chest_events(self, match_id: int) -> list[dict]:
+        """Coffres d'une partie, dans l'ordre : moment, ouvert / cassé, réouverture, type."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT t_in_match, how, reopen, category, kind FROM chest_events WHERE match_id=? ORDER BY t_in_match",
+                (match_id,)).fetchall()
+        return [{"t": r["t_in_match"] or 0.0, "how": r["how"], "reopen": bool(r["reopen"]), "category": r["category"],
+                 "kind": r["kind"]} for r in rows]
+
     def match_chest_types(self, match_id: int) -> list[tuple[str, int]]:
         with self._lock:
             rows = self.conn.execute(

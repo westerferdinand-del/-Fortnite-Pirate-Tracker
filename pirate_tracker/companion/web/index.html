@@ -62,6 +62,17 @@
   .step i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
   .hint { font-size: 13px; color: var(--text2); }
 
+  .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .live { display: none; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--green);
+          background: var(--card); border-radius: 14px; padding: 5px 11px 5px 9px; }
+  .live.on { display: inline-flex; }
+  .live i { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(52,199,89,.5); } 100% { box-shadow: 0 0 0 9px rgba(52,199,89,0); } }
+  .odds { padding: 18px 20px 18px; }
+  .odds .label { font-size: 15px; color: var(--text2); font-weight: 500; }
+  .odds-pct { font-size: 44px; font-weight: 700; letter-spacing: -1px; color: var(--accent); margin: 4px 0 4px; }
+  .odds .sub { font-size: 15px; color: var(--text2); margin-bottom: 14px; }
+  .big-step { height: 6px; margin-bottom: 8px; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
   .tile { background: var(--card); border-radius: 16px; padding: 14px 16px 15px; }
   .tile .t { font-size: 13px; color: var(--text2); font-weight: 500; }
@@ -122,7 +133,8 @@
 
   <!-- Aperçu -->
   <section id="v-home" class="view on">
-    <header><div class="eyebrow" id="today-label">Pirate Tracker</div><h1>Coffres</h1></header>
+    <header><div class="eyebrow" id="today-label">Pirate Tracker</div>
+      <div class="title-row"><h1>Coffres</h1><span class="live" id="live"><i></i>Partie en cours</span></div></header>
     <div class="card hero">
       <div class="label">Coffres ouverts</div>
       <div class="big" id="total">—</div>
@@ -132,6 +144,13 @@
       <div class="level-row"><b id="lvl">Niveau 1</b><span id="lvl-step"></span></div>
       <div class="steps" id="steps"></div>
       <div class="hint" id="lvl-hint"></div>
+    </div>
+    <div class="card odds">
+      <div class="label">Jeton pirate</div>
+      <div class="odds-pct" id="odds-pct">—</div>
+      <div class="sub" id="odds-sub"></div>
+      <div class="step big-step"><i id="odds-bar" style="width:0%"></i></div>
+      <div class="hint" id="odds-hint"></div>
     </div>
     <div class="grid">
       <div class="tile"><div class="t">Dernière partie</div><div class="v" id="last">—</div><div class="s" id="last-s"></div></div>
@@ -225,6 +244,12 @@ function renderHome(d) {
   $("avg").textContent = String(d.avg).replace(".", ",");
   $("avg-s").textContent = `par partie · ${plural(d.matches_count, "partie")}`;
   $("since").textContent = fmt(d.since_token);
+  $("live").classList.toggle("on", !!d.recording);
+  const o = d.odds, pct = o.percent;
+  $("odds-pct").textContent = (pct === 0 ? "0" : pct < 1 ? String(Number(pct.toPrecision(2))) : pct.toFixed(1)).replace(".", ",") + " %";
+  $("odds-sub").textContent = "de chances d'avoir déjà eu le jeton";
+  $("odds-bar").style.width = Math.min(100, (d.total / o.half_at) * 100).toFixed(1) + "%";
+  $("odds-hint").textContent = `${fmt(d.total)} / ${fmt(o.half_at)} coffres pour 1 chance sur 2`;
 
   const max = Math.max(1, ...d.days.map((x) => x.count));
   const best = d.days.reduce((a, x) => (x.count > a.count ? x : a), d.days[0] || { count: 0 });

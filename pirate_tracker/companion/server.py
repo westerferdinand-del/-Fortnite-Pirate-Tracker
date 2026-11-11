@@ -38,7 +38,7 @@ def new_token() -> str:
     return secrets.token_urlsafe(12)
 
 
-def build_summary(tracker) -> dict:
+def build_summary(tracker, recording: bool = False) -> dict:
     """Toutes les données affichées par l'application compagnon."""
     db = tracker.db
     s = tracker.stats()
@@ -60,7 +60,10 @@ def build_summary(tracker) -> dict:
     order = ["Mythique", "Légendaire", "Épique", "Rare", "Peu commun", "Commun", ""]
     loot.sort(key=lambda x: (not x["token"], order.index(x["rarity"]) if x["rarity"] in order else 6, -x["times"]))
     counted = s.total_chests - s.initial_chests
+    o = tracker.odds()
     return {
+        "recording": recording,
+        "odds": {"one_in": o.one_in, "percent": o.percent, "half_at": o.openings_for_half},
         "version": __version__,
         "generated_at": time.time(),
         "total": s.total_chests,
@@ -99,8 +102,9 @@ def _mode(p: str | None) -> str:
 
 
 class CompanionServer:
-    def __init__(self, tracker, token: str, port: int = 8765):
+    def __init__(self, tracker, token: str, port: int = 8765, recording=None):
         self.tracker = tracker
+        self.recording = recording or (lambda: False)
         self.token = token
         self.port = port
         self._httpd: ThreadingHTTPServer | None = None
@@ -163,7 +167,7 @@ class CompanionServer:
                                       {"Set-Cookie": f"pt={server.token}; Max-Age=31536000; Path=/; SameSite=Strict"})
                 if path == "/api/summary":
                     try:
-                        data = build_summary(server.tracker)
+                        data = build_summary(server.tracker, bool(server.recording()))
                     except Exception as e:  # noqa: BLE001
                         return self._send(500, json.dumps({"error": str(e)}).encode(), "application/json")
                     return self._send(200, json.dumps(data, ensure_ascii=False).encode("utf-8"),

@@ -78,6 +78,18 @@ class SettingsPage(QWidget):
         self._add(card, SettingRow("Coffres ouverts avant Pirate Tracker",
                                    "Ajoutés au total affiché partout (widget, vue d'ensemble, niveaux).",
                                    _row(self.initial, apply_btn)))
+        self.one_in = QSpinBox()
+        self.one_in.setRange(1, 100_000_000)
+        self.one_in.setSingleStep(1000)
+        self.one_in.setGroupSeparatorShown(True)
+        self.one_in.setFixedWidth(130)
+        self.one_in.setAlignment(Qt.AlignRight)
+        self.one_in.setPrefix("1 sur ")
+        self.one_in.setValue(int(cfg.get("token", "one_in", 137500) or 137500))
+        self.one_in.valueChanged.connect(lambda v: (cfg.set("token", "one_in", int(v)), ctx.refresh_all(animate=False)))
+        self._add(card, SettingRow("Chance du jeton pirate par coffre",
+                                   "Taux publié par Epic (partie normale) : 1 sur 137 500. Sert au calcul de vos chances.",
+                                   self.one_in))
         self.spins = []
         th = QWidget()
         tl = QHBoxLayout(th)

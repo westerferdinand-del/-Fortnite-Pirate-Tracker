@@ -12,7 +12,9 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QGridLayout, QHB
 
 from .. import items as items_mod
 from . import theme as T
-from .widgets import (BarChart, Card, Metric, MetricStrip, StepProgress, caps, faint, fmt_date, fmt_duration, fmt_int,
+from ..odds import format_percent
+from .widgets import (BarChart, Card, LiveChip, MatchTimeline, Metric, MetricStrip, StepProgress, animate_number, caps,
+                      faint, fmt_date, fmt_duration, fmt_int,
                       hline, section, title)
 
 CONTENT_MAX = 1120
@@ -158,6 +160,43 @@ class OverviewPage(QWidget):
         hero.lay.addLayout(row)
         lay.addWidget(hero)
 
+        # --- chances du jeton pirate
+        odds = Card(padding=24)
+        orow = QHBoxLayout()
+        orow.setSpacing(36)
+        ol = QVBoxLayout()
+        ol.setSpacing(6)
+        ol.addWidget(caps("Jeton pirate"))
+        self.odds_pct = QLabel("—")
+        self.odds_pct.setFont(T.font(40, QFont.DemiBold, display=True, tabular=True))
+        self.odds_pct.setStyleSheet(f"color: {T.ACCENT};")
+        ol.addWidget(self.odds_pct)
+        self.odds_sub = faint("", wrap=False)
+        self.odds_sub.setFont(T.font(13))
+        ol.addWidget(self.odds_sub)
+        orow.addLayout(ol, 3)
+        orr = QVBoxLayout()
+        orr.setSpacing(10)
+        orr.addStretch(1)
+        oh = QHBoxLayout()
+        self.odds_goal = QLabel("")
+        self.odds_goal.setFont(T.font(13, QFont.Medium))
+        oh.addWidget(self.odds_goal)
+        oh.addStretch(1)
+        self.odds_goal_pct = faint("", wrap=False)
+        oh.addWidget(self.odds_goal_pct)
+        orr.addLayout(oh)
+        self.odds_bar = StepProgress()
+        self.odds_bar.steps = 1
+        orr.addWidget(self.odds_bar)
+        self.odds_note = faint("", wrap=True)
+        self.odds_note.setFont(T.font(12))
+        orr.addWidget(self.odds_note)
+        orr.addStretch(1)
+        orow.addLayout(orr, 2)
+        odds.lay.addLayout(orow)
+        lay.addWidget(odds)
+
         # --- chiffres clés
         self.strip = MetricStrip(["Dernière partie", "Aujourd'hui", "Moyenne par partie", "Depuis le dernier jeton"])
         lay.addWidget(self.strip)
@@ -209,7 +248,8 @@ class OverviewPage(QWidget):
         recent.lay.addWidget(self.recent_empty)
         lay.addWidget(recent)
 
-        self.head = header("Vue d'ensemble", "Mise à jour automatique à la fin de chaque partie")
+        self.live = LiveChip()
+        self.head = header("Vue d'ensemble", "Mise à jour automatique à la fin de chaque partie", self.live)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(page_shell(self.head, body))
@@ -218,7 +258,16 @@ class OverviewPage(QWidget):
         tr = self.ctx.tracker
         s = tr.stats()
         st = tr.level()
-        self.total.setText(fmt_int(s.total_chests))
+        animate_number(self.total, s.total_chests)
+        self.live.set_live(bool(self.ctx.watcher.status.recording))
+        o = tr.odds()
+        self.odds_pct.setText(format_percent(o.percent))
+        self.odds_sub.setText(f"de chances d'avoir déjà eu le jeton, avec {fmt_int(o.openings)} ouvertures")
+        self.odds_goal.setText("Vers 1 chance sur 2")
+        self.odds_goal_pct.setText(f"{fmt_int(o.openings)} / {fmt_int(o.openings_for_half)}")
+        self.odds_bar.set_state(0, min(1.0, o.openings / o.openings_for_half) if o.openings_for_half else 0)
+        self.odds_note.setText(f"Taux publié par Epic : 1 chance sur {fmt_int(o.one_in)} par coffre (plus élevé pendant les "
+                               "Treasure Hours). Chaque coffre est un tirage indépendant.")
         counted = s.total_chests - s.initial_chests
         parts = [f"{fmt_int(counted)} ouvertures comptées par Pirate Tracker",
                  f"{fmt_int(s.unique_chests)} coffres différents"]
@@ -324,6 +373,15 @@ class MatchesPage(QWidget):
         self.detail.lay.addLayout(self.detail_metrics)
         self.detail_note = faint("")
         self.detail.lay.addWidget(self.detail_note)
+        self.detail.lay.addWidget(caps("Déroulé de la partie"))
+        self.timeline = MatchTimeline()
+        self.detail.lay.addWidget(self.timeline)
+        legend = QLabel(f"<span style='color:{T.ACCENT}'>●</span>&nbsp; ouvert &nbsp;&nbsp;&nbsp; "
+                        f"<span style='color:{T.ACCENT}'>○</span>&nbsp; rouvert &nbsp;&nbsp;&nbsp; "
+                        f"<span style='color:{T.ORANGE}'>◇</span>&nbsp; cassé")
+        legend.setObjectName("faint")
+        legend.setFont(T.font(11))
+        self.detail.lay.addWidget(legend)
         self.detail.lay.addWidget(hline())
         self.detail.lay.addWidget(caps("Objets ramassés"))
         self.items = make_table(["Moment", "Objet", "Rareté", "Quantité"], stretch=1, min_height=200)
@@ -377,6 +435,7 @@ class MatchesPage(QWidget):
         if m is None:
             return
         self.detail_title.setText(f"{playlist_name(m.playlist)} · {fmt_date(m.started_at)}")
+        self.timeline.set_data(m.duration, self.ctx.tracker.db.match_chest_events(m.id))
         self.dm["Ouvertures"].set(fmt_int(m.chests))
         self.dm["Coffres uniques"].set(fmt_int(m.unique_chests))
         self.dm["Cassés"].set(fmt_int(m.broken))

@@ -27,9 +27,12 @@ from typing import Callable
 
 from . import process_watch
 from .paths import resource_path
+from .replay_header import read_header
 
-STABLE_SECONDS = 30.0  # le fichier ne doit plus changer pendant ce délai
+STABLE_SECONDS = 30.0  # fichier sans en-tête lisible : il ne doit plus changer pendant ce délai
+FINISHED_STABLE_SECONDS = 3.0  # en-tête « terminé » : délai de sécurité avant lecture
 POLL_SECONDS = 10.0
+POLL_SECONDS_PLAYING = 3.0  # Fortnite ouvert ou partie en cours : vérification plus fréquente
 READER_TIMEOUT = 300
 
 
@@ -110,6 +113,7 @@ class WatcherStatus:
     reader_ok: bool = False
     fortnite_running: bool = False
     pending: list[str] = field(default_factory=list)
+    recording: list[str] = field(default_factory=list)  # replays en cours d'enregistrement (partie en cours)
     last_analysis: float | None = None
 
 
@@ -175,7 +179,8 @@ class ReplayWatcher:
                 self.scan(now)
             except Exception as e:  # le surveillant ne doit jamais s'arrêter
                 self._set_status("configuring", f"Erreur pendant l'analyse : {e}")
-            self._wake.wait(self.poll_seconds)
+            busy = self.status.fortnite_running or bool(self.status.recording)
+            self._wake.wait(min(self.poll_seconds, POLL_SECONDS_PLAYING) if busy else self.poll_seconds)
             self._wake.clear()
 
     def scan(self, now: float | None = None) -> list[dict]:
@@ -199,7 +204,7 @@ class ReplayWatcher:
             return []
 
         since = self.since()
-        ready, waiting = [], []
+        ready, waiting, recording = [], [], []
         current = set()
         for p in d.glob("*.replay"):
             try:
@@ -215,12 +220,23 @@ class ReplayWatcher:
             fail = self._failures.get(key)
             if fail and fail[0] == st.st_size and now - fail[1] < 600:
                 continue  # échec récent sur ce même fichier : on réessaie plus tard
+            # L'en-tête dit si l'enregistrement est terminé. Un replay en cours est chiffré sans clé :
+            # le lire est impossible (et produisait autrefois un faux « échec » en pleine partie).
+            header = read_header(p)
+            if header is not None and not header.finished:
+                recording.append(p.name)
+                self._files.pop(key, None)
+                continue
             prev = self._files.get(key)
             if prev is None or prev.size != st.st_size or prev.mtime != st.st_mtime:
                 self._files[key] = FileState(st.st_size, st.st_mtime, now)
-                waiting.append(p.name)
-                continue
-            if now - max(prev.seen_at, st.st_mtime) < self.stable_seconds:
+                if header is None or header.finished and self.stable_seconds > 0:
+                    waiting.append(p.name)
+                    continue
+            stable = (min(self.stable_seconds, FINISHED_STABLE_SECONDS) if header is not None and header.finished
+                      else self.stable_seconds)
+            prev = self._files[key]
+            if now - max(prev.seen_at, st.st_mtime) < stable:
                 waiting.append(p.name)
                 continue
             ready.append(p)
@@ -229,6 +245,7 @@ class ReplayWatcher:
                 del self._files[k]
 
         self.status.pending = waiting
+        self.status.recording = recording
         results = []
         if ready:
             self._set_status("active", f"Analyse de {len(ready)} replay(s)…")
@@ -252,10 +269,10 @@ class ReplayWatcher:
                 self.on_result(res)
             self.status.last_analysis = now
 
-        if waiting:
-            msg = ("Partie en cours d'enregistrement — le compteur sera mis à jour à la fin de la partie"
-                   if self.status.fortnite_running else "Replay en attente de finalisation…")
-            self._set_status("active", msg)
+        if recording:
+            self._set_status("active", "Partie en cours — le compteur sera mis à jour dès la fin de la partie")
+        elif waiting:
+            self._set_status("active", "Fin de partie détectée : analyse dans un instant…")
         else:
             self._set_status("active", "Prêt : chaque partie sera analysée automatiquement à sa fin")
         return results
