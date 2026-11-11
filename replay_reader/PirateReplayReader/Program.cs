@@ -17,7 +17,7 @@ using Unreal.Core.Contracts;
 using Unreal.Core.Models;
 using Unreal.Core.Models.Enums;
 
-const string Version = "1.3.0";
+const string Version = "1.4.0";
 
 var jsonOptions = new JsonSerializerOptions
 {
@@ -270,6 +270,9 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
 
     private ChestReplayReader() : base(null, ParseMode.Normal) { }
 
+    /// <summary>Vidage brut pour le diagnostic (variable d'environnement PIRATE_DUMP = fichier).</summary>
+    internal static StreamWriter? Dump;
+
     private new float CurrentTime
     {
         get => _timeOverride ?? base.CurrentTime;
@@ -287,6 +290,10 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
             ClassEvidence.Clear();
         }
         var reader = new ChestReplayReader();
+        if (Environment.GetEnvironmentVariable("PIRATE_DUMP") is string dumpPath && dumpPath.Length > 0)
+        {
+            Dump = new StreamWriter(dumpPath);
+        }
         FortniteReplayReader.Models.FortniteReplay? replay = null;
         Exception? error = null;
         try
@@ -303,6 +310,8 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
         {
             throw error ?? new InvalidDataException("Replay vide");
         }
+        Dump?.Dispose();
+        Dump = null;
         var result = reader.BuildResult(path, replay);
         if (error != null)
         {
@@ -329,6 +338,25 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
             return;
         }
 
+        if (Dump != null)
+        {
+            switch (exportGroup)
+            {
+                case PlayerPawn dp:
+                    Dump.WriteLine($"{CurrentTime:F1}\tPAWN\t{actor}\tch={channelIndex}\tps={dp.PlayerState}\t{CurrentExportPath}");
+                    break;
+                case BaseContainer dc:
+                    Dump.WriteLine($"{CurrentTime:F1}\tCONT\t{actor}\tsp={dc.SearchingPawn}\tanim={dc.SearchAnimationCount}\tas={dc.bAlreadySearched}\tdes={dc.bDestroyed}\tid={dc.bInstantDeath}\t{CurrentExportPath}");
+                    break;
+                case FortniteReplayReader.Models.NetFieldExports.GameState dg:
+                    Dump.WriteLine($"{CurrentTime:F1}\tGS\trec={dg.RecorderPlayerState?.Value}\trel={dg.PawnForReplayRelevancy}");
+                    break;
+                case FortPickup dk when dk.PickupTarget is uint tg && tg != 0:
+                    Dump.WriteLine($"{CurrentTime:F1}\tPICK\t{actor}\ttarget={tg}\t{dk.ItemDefinition?.Name}");
+                    break;
+            }
+        }
+
         switch (exportGroup)
         {
             case FortniteReplayReader.Models.NetFieldExports.GameState gs:
@@ -343,8 +371,11 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
                 }
                 break;
 
-            case PlayerPawn pawn when pawn.PlayerState.HasValue:
-                _pawnToPlayerState[actor] = pawn.PlayerState.Value;
+            // PlayerState repasse à 0 quand le personnage meurt ou n'est plus contrôlé : on garde le
+            // dernier joueur connu (sinon le personnage d'après une relance était « oublié » en fin de
+            // partie et ses coffres n'étaient pas comptés ; constaté sur un replay réel v43, nov. 2026).
+            case PlayerPawn pawn when pawn.PlayerState is uint pst && pst != 0:
+                _pawnToPlayerState[actor] = pst;
                 break;
 
             // Coffres uniquement (les caisses de munitions et autres conteneurs sont ignorés)
@@ -413,6 +444,13 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
     private readonly Dictionary<uint, uint> _chestAnim = new();
     private readonly Dictionary<uint, uint> _chestPawn = new();
     private readonly HashSet<uint> _countedViaPawnOnly = new();
+    private readonly List<(float t, uint chest, string path, uint pawn, bool broken, bool direct, bool reopen)> _pawnOnlyPending = new();
+    private bool _animEverSeen;
+
+    /// <summary>Ouvertures retenues : celles détectées par le compteur, ou (vieux replays sans
+    /// compteur) celles détectées par SearchingPawn seul.</summary>
+    internal List<(float t, uint chest, string path, uint pawn, bool broken, bool direct, bool reopen)> FinalOpens()
+        => _animEverSeen ? _opens : _opens.Concat(_pawnOnlyPending).ToList();
     private readonly Dictionary<uint, float> _animWithoutPawnAt = new();
     private readonly HashSet<uint> _hasOpening = new();
     private readonly HashSet<uint> _chestsDestroyed = new();
@@ -432,6 +470,7 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
     {
         uint? pawn = chest.SearchingPawn is uint p && p != 0 ? p : null;
         var anim = chest.SearchAnimationCount;  // 0 = non transmis dans cette mise à jour
+        _animEverSeen |= anim > 0;
         var broken = chest.bDestroyed || chest.bInstantDeath;
         if (pawn.HasValue)
         {
@@ -458,7 +497,7 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
             {
                 // Première fois que l'on voit son compteur : ouverture comptée seulement si le joueur
                 // est transmis avec (sinon le coffre avait été ouvert avant d'être visible).
-                opens = pawn.HasValue && !_countedViaPawnOnly.Contains(actor) ? 1 : 0;
+                opens = pawn.HasValue ? 1 : 0;
                 if (!pawn.HasValue)
                 {
                     _animWithoutPawnAt[actor] = CurrentTime;
@@ -475,7 +514,12 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
         }
         else if (pawn.HasValue && !_chestAnim.ContainsKey(actor) && _countedViaPawnOnly.Add(actor))
         {
-            opens = 1;  // joueur transmis sans compteur (anciennes versions du jeu)
+            // Joueur transmis sans compteur. Anciennes versions du jeu : c'est une ouverture. Depuis
+            // (vérifié sur un replay réel v43) SearchingPawn est aussi fixé sans aucune ouverture
+            // (fouille commencée puis abandonnée, plusieurs coffres touchés en même temps…) et chaque
+            // vraie ouverture arrive avec SearchAnimationCount. Mis en attente : retenu seulement si le
+            // replay ne transmet jamais SearchAnimationCount (voir FinalOpens).
+            _pawnOnlyPending.Add((CurrentTime, actor, classPath, pawn.Value, broken, true, false));
         }
 
         if (opens > 0 && (pawn ?? _chestPawn.GetValueOrDefault(actor)) is uint who && who != 0)
@@ -524,7 +568,7 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
                 var c = new GenericChest { SearchingPawn = u.pawn, SearchAnimationCount = u.anim, bDestroyed = u.destroyed };
                 r.RecordChestUpdate(u.chest, StandardChestPath, c);
             }
-            var mine = r._opens.Where(o => owner.Contains(o.pawn)).ToList();
+            var mine = r.FinalOpens().Where(o => owner.Contains(o.pawn)).ToList();
             var got = (mine.Count, mine.Select(o => o.chest).Distinct().Count(), mine.Count(o => o.broken));
             var ok = got == (openings, unique, broken);
             failures += ok ? 0 : 1;
@@ -560,6 +604,12 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
         Check("déjà ouvert avant d'être visible", new[] { (10f, 1u, (uint?)null, 1u, false) }, 0, 0);
         Check("ouvreur transmis juste après le compteur", new[] { (10f, 1u, (uint?)null, 1u, false),
                                                                  (10.5f, 1u, (uint?)ME, 0u, false) }, 1, 1);
+        Check("joueur transmis sans ouverture (fouille abandonnée) : ignoré", new[] { (10f, 1u, (uint?)ME, 0u, false),
+                                                                                     (20f, 2u, (uint?)OTHER, 1u, false) }, 0, 0);
+        Check("fouille abandonnée par un autre puis ouvert par moi", new[] { (10f, 1u, (uint?)OTHER, 0u, false),
+                                                                            (15f, 1u, (uint?)ME, 1u, false) }, 1, 1);
+        Check("vieux replay sans compteur : joueur seul = ouverture", new[] { (10f, 1u, (uint?)ME, 0u, false),
+                                                                             (20f, 2u, (uint?)ME, 0u, false) }, 2, 2);
         Check("ouvreur transmis bien plus tard (ignoré)", new[] { (10f, 1u, (uint?)null, 1u, false),
                                                                  (60f, 1u, (uint?)ME, 0u, false) }, 0, 0);
 
@@ -647,7 +697,8 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
         result.OwnerFound = ownerPawns.Count > 0;
         result.PawnsSeen = _pawnToPlayerState.Count;
         result.OwnerPawns = ownerPawns.Count;
-        result.ChestSearchesSeen = _opens.Select(o => o.chest).Distinct().Count();
+        var opens = FinalOpens();
+        result.ChestSearchesSeen = opens.Select(o => o.chest).Distinct().Count();
         lock (AliasedPaths)
         {
             result.AliasedClasses = AliasedPaths.Select(p => p[(p.LastIndexOf('/') + 1)..].Split('.')[0]).OrderBy(x => x).ToList();
@@ -670,7 +721,7 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
         }
 
         // Chaque ouverture compte (un coffre rempli à nouveau puis rouvert = 2 ouvertures).
-        foreach (var o in _opens.OrderBy(o => o.t))
+        foreach (var o in opens.OrderBy(o => o.t))
         {
             if (ownerPawns.Contains(o.pawn))
             {
@@ -751,7 +802,7 @@ public class ChestReplayReader : FortniteReplayReader.ReplayReader
             .Where(p => p != StandardChestPath)
             .OrderBy(p => p)
             .ToList();
-        if (_chestsOpened.Count > 0 && _opens.Count == 0)
+        if (_chestsOpened.Count > 0 && opens.Count == 0)
         {
             result.Warnings.Add("Ce replay n'indique pas qui ouvre les coffres (version de Fortnite trop ancienne) : coffres non comptés.");
         }

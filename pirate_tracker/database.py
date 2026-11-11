@@ -79,6 +79,19 @@ CREATE INDEX IF NOT EXISTS idx_items_match ON items(match_id);
 
 
 # Informations techniques conservées pour comprendre une analyse surprenante (ex. 0 coffre)
+# Lecteur 1.4 : corrige les coffres oubliés après une mort / relance (Chapitre 7, nov. 2026). Les
+# parties analysées par un lecteur plus ancien sont recomptées automatiquement.
+REANALYZE_BELOW = "1.4.0"
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    out = []
+    for part in str(v).split("."):
+        digits = "".join(ch for ch in part if ch.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out)
+
+
 DIAG_KEYS = ("reader_version", "branch", "owner_found", "relevancy_pawns", "pawns_seen", "owner_pawns", "chests_seen",
              "chest_searches_seen", "chests_opened_by_anyone", "aliased_classes", "special_chest_classes",
              "chest_classes_opened", "other_containers_searched", "chests_destroyed_unattributed", "partial",
@@ -194,11 +207,22 @@ class Database:
 
     # ------------------------------------------------------------------ replays
     def is_processed(self, path: str, size: int, mtime: float) -> bool:
+        """Replay déjà analysé dans cet état, par un lecteur assez récent.
+
+        Une partie analysée par un lecteur plus ancien que ``REANALYZE_BELOW`` est analysée à nouveau
+        (le résultat remplace l'ancien : pas de double comptage), pour corriger les comptes faux.
+        """
         with self._lock:
             row = self.conn.execute(
-                "SELECT replay_size, replay_mtime FROM matches WHERE replay_path=?", (path,)
+                "SELECT replay_size, replay_mtime, diagnostics FROM matches WHERE replay_path=?", (path,)
             ).fetchone()
-        return bool(row) and row["replay_size"] == size and abs(row["replay_mtime"] - mtime) < 1e-3
+        if not (row and row["replay_size"] == size and abs(row["replay_mtime"] - mtime) < 1e-3):
+            return False
+        try:
+            version = json.loads(row["diagnostics"] or "{}").get("reader_version") or "0"
+        except (ValueError, AttributeError):
+            version = "0"
+        return _version_tuple(version) >= _version_tuple(REANALYZE_BELOW)
 
     def upsert_match(self, res: dict, size: int = 0, mtime: float = 0.0) -> dict:
         """Enregistre (ou remplace) le résultat d'analyse d'un replay.

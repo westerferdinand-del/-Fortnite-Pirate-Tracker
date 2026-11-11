@@ -10,6 +10,7 @@ from pirate_tracker.tracker import Tracker
 
 
 def fake_result(path="C:/Demos/a.replay", chests=3, items=(), ok=True, started="2026-11-01T20:00:00", **kw):
+    kw.setdefault("reader_version", "1.4.0")
     return {"ok": ok, "file": path, "started_utc": started, "duration_s": 1200.0, "placement": 5,
             "total_players": 100, "eliminations": 2, "playlist": "Playlist_DefaultSolo",
             "chests": [{"t": 60.0 + i * 30, "id": 1000 + i, "kind": "Chest"} for i in range(chests)],
@@ -54,6 +55,16 @@ def test_match_is_recorded_and_persists(tmp_path):
     assert db2.is_processed("C:/Demos/a.replay", 10, 1.0)
     assert not db2.is_processed("C:/Demos/a.replay", 11, 1.0)  # le fichier a changé → à relire
     db2.close()
+
+
+def test_matches_from_older_reader_are_reanalysed_without_double_count(tracker, db):
+    """Lecteur < 1.4 (coffres oubliés après une relance) : la partie est relue, et le nouveau
+    résultat remplace l'ancien."""
+    tracker.record_match(fake_result(chests=1, reader_version="1.3.0"), size=5, mtime=2.0)
+    assert not db.is_processed("C:/Demos/a.replay", 5, 2.0)  # à relire avec le nouveau lecteur
+    tracker.record_match(fake_result(chests=4, reader_version="1.4.0"), size=5, mtime=2.0)
+    assert db.is_processed("C:/Demos/a.replay", 5, 2.0)
+    assert tracker.stats().total_chests == 4 and tracker.stats().matches_count == 1
 
 
 def test_reprocessing_same_replay_never_double_counts(tracker):

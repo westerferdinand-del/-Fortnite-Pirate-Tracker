@@ -1,6 +1,6 @@
 ; Installateur Windows (Inno Setup 6) — compilé par la CI après PyInstaller
 #define AppName "Pirate Tracker"
-#define AppVersion "3.0.0"
+#define AppVersion "3.0.1"
 
 [Setup]
 AppId={{6B7C3F9A-1E2D-4C5B-9A8F-PIRATETRACKER}

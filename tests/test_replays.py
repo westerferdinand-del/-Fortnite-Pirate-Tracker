@@ -80,6 +80,30 @@ def test_unique_chests_and_openings_on_real_replay(tmp_path):
     assert len(res["decisions"]) == 5 and all("COMPTÉ" in d for d in res["decisions"])
 
 
+CH7 = Path(__file__).parent.parent / "replays_a_analyser" / "UnsavedReplay-2026.11.11-11.50.29.replay"
+
+
+@pytest.mark.skipif(not (CH7.exists() and reader_available()), reason="replay Chapitre 7 ou lecteur absent")
+def test_real_chapter7_replay_after_reboots():
+    """Vrai replay du Chapitre 7 (v43.00, Treasure Hunters, envoyé par l'utilisateur, nov. 2026).
+
+    Le joueur est mort et revenu deux fois. Lecteur 1.3 : 1 seul coffre, car le PlayerState du
+    dernier personnage repasse à 0 à sa mort et ce personnage était « oublié ». Référence établie
+    en inspectant le replay : les 4 personnages du joueur (PlayerState 694) ont SearchingPawn +
+    SearchAnimationCount sur 4 coffres (10:44, 13:40, 13:44, 14:04) ; le dernier est cassé ensuite
+    par quelqu'un d'autre et n'est compté qu'une fois.
+    """
+    res = replays.read_replay(CH7)
+    assert res["ok"] and not res["partial"]
+    assert res["branch"] == "++Fortnite+Release-43.00"
+    assert res["owner_pawn_ids"] == [690, 11448, 34432, 43182]
+    assert [c["t"] for c in res["chests"]] == pytest.approx([644.6, 820.8, 824.6, 844.1], abs=0.05)
+    assert (res["total_openings"], res["unique_chests"], res["inferred_openings"]) == (4, 4, 0)
+    assert [c["how"] for c in res["chests"]] == ["ouvert"] * 4
+    assert res["chest_classes_opened"] == {"Tiered_Chest_Athena": 2, "AlwaysSpawn_NormalChest": 2}
+    assert not any(c["special"] for c in res["chests"])
+
+
 @pytest.mark.skipif(not reader_available(), reason="lecteur de replays absent")
 def test_reader_selftest_refills_and_reopenings():
     """Scénarios simulés : réouverture d'un coffre rempli (même joueur ou autre), coffre déjà ouvert, cassé…"""

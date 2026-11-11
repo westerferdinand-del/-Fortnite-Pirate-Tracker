@@ -50,7 +50,7 @@ dans une mise à jour séparée, coffre cassé…), exécuté par les tests et l
 `faction`, `spécial`, d'après le nom de la classe. Seuls rare / enterré / faction / spécial sont
 marqués `special` : les coffres normaux d'une nouvelle saison ne le sont plus (bug corrigé en 2.1).
 
-**Architecture de l'analyse (lecteur 1.3)**
+**Architecture de l'analyse (lecteur 1.4)**
 1. Lecture : bibliothèque intégrée (`vendor/`).
 2. Résolution des classes : toute classe inconnue est lue avec une description générique
    (`PathAliasWithFields`). Les propriétés d'une classe ne sont déclarées dans le replay qu'à leur
@@ -69,9 +69,25 @@ Tests : `--selftest` (28 vérifications simulées : ouvert, rouvert ×3, cassé,
 adversaire, plusieurs joueurs, changement de personnage, déjà ouvert, classification) + replay réel
 du Chapitre 5 en non-régression.
 
-**Non vérifié faute de replay** : le comportement réel des coffres du Chapitre 7 (noms de classes,
-remplissage, destruction). Le diagnostic de l'application (Parties → Copier le diagnostic) et les
-journaux (`%APPDATA%\PirateTracker\logs`) donnent ces informations à partir d'une vraie partie.
+**Vérifié sur un vrai replay du Chapitre 7** (v43.00, Treasure Hunters, escouade, 11 nov. 2026,
+`replays_a_analyser/UnsavedReplay-2026.11.11-11.50.29.replay`, joueur mort et revenu deux fois) :
+- Classes de coffres observées : `Tiered_Chest_Athena`, `AlwaysSpawn_NormalChest`,
+  `AlwaysSpawn_RareChest`, `B_TieredChest_Relics`, `B_Athena_BuriedChest_Chest`,
+  `Tiered_Chest_5_Child`, `BGA_LootCannon_StandardChest_Pirate`, `BGA_ExtractionPointGameplay_Chest`.
+- **Bug corrigé (lecteur 1.4)** : à la mort d'un personnage, son `PlayerState` repasse à 0 ; le lecteur
+  remplaçait le lien personnage → joueur par 0 et « oubliait » le personnage d'après la relance.
+  Résultat : 1 coffre au lieu de 4. Le dernier joueur non nul est désormais conservé.
+- **Faux positifs évités (lecteur 1.4)** : en v43, `SearchingPawn` est aussi fixé sans aucune ouverture
+  (42 cas sur des coffres dans ce replay : fouille commencée puis abandonnée, ou un même personnage
+  sur 8 coffres en 0,5 s). Toutes les vraies ouvertures (165) arrivent avec une augmentation de
+  `SearchAnimationCount`. `SearchingPawn` seul ne compte donc plus que dans les vieux replays qui ne
+  transmettent jamais ce compteur.
+- Les parties analysées par un lecteur plus ancien sont recomptées automatiquement (sans double
+  comptage) tant que le fichier replay existe encore.
+- Diagnostic brut : variable d'environnement `PIRATE_DUMP=fichier.tsv` (toutes les mises à jour de
+  coffres, personnages, ramassages).
+
+Non vérifié faute de données : coffres qui se remplissent puis sont rouverts (aucun dans ce replay).
 
 **Signaux étudiés puis écartés (v3, mesurés sur le replay réel)**
 - Butin qui apparaît (`FortPickup.LootInitialPosition`, `bTossedFromContainer`) : `bTossedFromContainer`
