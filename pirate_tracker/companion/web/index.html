@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Coffres">
+<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<title>Pirate Tracker</title>
+<style>
+  :root {
+    --bg: #f2f2f7; --card: #ffffff; --text: #000000; --text2: #6e6e73; --text3: #8e8e93;
+    --sep: rgba(60, 60, 67, .18); --fill: rgba(120, 120, 128, .12); --accent: #c48a1a;
+    --accent-soft: rgba(196, 138, 26, .14); --green: #34c759; --red: #ff3b30; --orange: #ff9500;
+    --tabbar: rgba(249, 249, 249, .86); --seg-on: #ffffff;
+    --r-common: #8e8e93; --r-uncommon: #34c759; --r-rare: #0a84ff; --r-epic: #af52de;
+    --r-legendary: #ff9500; --r-mythic: #c9a227;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000; --card: #1c1c1e; --text: #ffffff; --text2: #98989f; --text3: #636366;
+      --sep: rgba(84, 84, 88, .55); --fill: rgba(120, 120, 128, .24); --accent: #f2c14e;
+      --accent-soft: rgba(242, 193, 78, .16); --tabbar: rgba(22, 22, 24, .82); --seg-on: #636366;
+      --r-rare: #409cff; --r-epic: #bf5af2; --r-legendary: #ff9f0a; --r-mythic: #f2c14e;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 17px/1.3 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
+    padding: env(safe-area-inset-top) 0 calc(84px + env(safe-area-inset-bottom));
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 0 16px; }
+  .view { display: none; animation: fade .25s ease; }
+  .view.on { display: block; }
+  @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+  header { padding: 18px 4px 8px; }
+  .eyebrow { font-size: 13px; color: var(--text2); font-weight: 500; letter-spacing: -.08px; }
+  h1 { font-size: 34px; line-height: 41px; font-weight: 700; letter-spacing: .37px; margin: 2px 0 0; }
+
+  .hero { text-align: left; padding: 22px 20px 20px; }
+  .hero .label { font-size: 15px; color: var(--text2); font-weight: 500; }
+  .big { font-size: 64px; line-height: 1; font-weight: 700; letter-spacing: -1.5px; margin: 6px 0 8px; }
+  .hero .sub { font-size: 15px; color: var(--text2); }
+  .card { background: var(--card); border-radius: 16px; margin: 0 0 16px; overflow: hidden; }
+  .section-title { font-size: 13px; color: var(--text2); text-transform: uppercase; letter-spacing: -.08px;
+                   margin: 24px 16px 7px; }
+
+  .level { padding: 16px 20px 18px; }
+  .level-row { display: flex; justify-content: space-between; align-items: baseline; }
+  .level-row b { font-size: 17px; font-weight: 600; }
+  .level-row span { font-size: 15px; color: var(--text2); }
+  .steps { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin: 12px 0 8px; }
+  .step { height: 6px; border-radius: 3px; background: var(--fill); overflow: hidden; }
+  .step i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+  .hint { font-size: 13px; color: var(--text2); }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .tile { background: var(--card); border-radius: 16px; padding: 14px 16px 15px; }
+  .tile .t { font-size: 13px; color: var(--text2); font-weight: 500; }
+  .tile .v { font-size: 28px; font-weight: 700; letter-spacing: -.4px; margin-top: 6px; }
+  .tile .s { font-size: 13px; color: var(--text3); margin-top: 2px; white-space: nowrap; overflow: hidden;
+             text-overflow: ellipsis; }
+
+  .chart { padding: 16px 16px 12px; }
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+  .chart-head b { font-size: 17px; font-weight: 600; }
+  .chart-head span { font-size: 13px; color: var(--text2); }
+  .bars { display: flex; align-items: flex-end; gap: 3px; height: 120px; }
+  .bars div { flex: 1; background: var(--fill); border-radius: 3px 3px 1px 1px; min-height: 3px; }
+  .bars div.on { background: var(--accent); }
+  .axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--text3); margin-top: 6px; }
+
+  .list { background: var(--card); border-radius: 16px; overflow: hidden; margin-bottom: 16px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 11px 16px; min-height: 52px; position: relative; }
+  .row + .row::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; height: .5px;
+                        background: var(--sep); }
+  .row .main { flex: 1; min-width: 0; }
+  .row .title { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .meta { font-size: 13px; color: var(--text2); margin-top: 1px; }
+  .row .num { font-size: 22px; font-weight: 600; color: var(--accent); }
+  .row .num.zero { color: var(--text3); }
+  .row .count { font-size: 15px; color: var(--text2); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .pill { font-size: 12px; font-weight: 600; color: var(--accent); background: var(--accent-soft);
+          border-radius: 10px; padding: 2px 8px; margin-left: 6px; }
+  .kv .row { min-height: 44px; }
+  .kv .k { flex: 1; font-size: 17px; }
+  .kv .val { font-size: 17px; color: var(--text2); }
+
+  .seg { display: flex; background: var(--fill); border-radius: 9px; padding: 2px; margin: 8px 0 14px; }
+  .seg button { flex: 1; border: 0; background: transparent; color: var(--text); font: 600 13px/1 inherit;
+                font-family: inherit; padding: 7px 0; border-radius: 7px; }
+  .seg button.on { background: var(--seg-on); box-shadow: 0 3px 8px rgba(0,0,0,.12), 0 3px 1px rgba(0,0,0,.04); }
+
+  .empty { text-align: center; color: var(--text2); padding: 40px 24px; font-size: 15px; }
+  .status { text-align: center; font-size: 12px; color: var(--text3); margin: 18px 0 8px; }
+  .banner { display: none; background: var(--card); color: var(--red); border-radius: 12px; padding: 10px 14px;
+            font-size: 14px; margin: 8px 0 12px; }
+  .banner.on { display: block; }
+
+  nav { position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: center;
+        background: var(--tabbar); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+        border-top: .5px solid var(--sep); padding: 6px 0 calc(6px + env(safe-area-inset-bottom)); }
+  nav button { flex: 1; max-width: 160px; border: 0; background: none; color: var(--text3); font: 500 10px/1.2 inherit;
+               font-family: inherit; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px 0; }
+  nav button svg { width: 26px; height: 26px; }
+  nav button.on { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <div id="banner" class="banner">Ordinateur injoignable. Vérifiez que Pirate Tracker est ouvert et que le
+    téléphone est sur le même Wi-Fi.</div>
+
+  <!-- Aperçu -->
+  <section id="v-home" class="view on">
+    <header><div class="eyebrow" id="today-label">Pirate Tracker</div><h1>Coffres</h1></header>
+    <div class="card hero">
+      <div class="label">Coffres ouverts</div>
+      <div class="big" id="total">—</div>
+      <div class="sub" id="total-sub"></div>
+    </div>
+    <div class="card level">
+      <div class="level-row"><b id="lvl">Niveau 1</b><span id="lvl-step"></span></div>
+      <div class="steps" id="steps"></div>
+      <div class="hint" id="lvl-hint"></div>
+    </div>
+    <div class="grid">
+      <div class="tile"><div class="t">Dernière partie</div><div class="v" id="last">—</div><div class="s" id="last-s"></div></div>
+      <div class="tile"><div class="t">Aujourd'hui</div><div class="v" id="today">—</div><div class="s" id="today-s"></div></div>
+      <div class="tile"><div class="t">Moyenne</div><div class="v" id="avg">—</div><div class="s" id="avg-s"></div></div>
+      <div class="tile"><div class="t">Sans jeton</div><div class="v" id="since">—</div><div class="s">coffres depuis le dernier</div></div>
+    </div>
+    <div class="card chart">
+      <div class="chart-head"><b>30 derniers jours</b><span id="chart-sum"></span></div>
+      <div class="bars" id="bars"></div>
+      <div class="axis"><span id="axis-start"></span><span>aujourd'hui</span></div>
+    </div>
+    <div class="section-title">Records</div>
+    <div class="list kv" id="records"></div>
+    <div class="status" id="status"></div>
+  </section>
+
+  <!-- Parties -->
+  <section id="v-matches" class="view">
+    <header><div class="eyebrow">Historique</div><h1>Parties</h1></header>
+    <div class="list" id="matches"></div>
+  </section>
+
+  <!-- Butin -->
+  <section id="v-loot" class="view">
+    <header><div class="eyebrow">D'après vos replays</div><h1>Butin</h1></header>
+    <div class="seg" id="seg">
+      <button class="on" data-f="all">Tout</button><button data-f="Légendaire">Légendaire</button>
+      <button data-f="Épique">Épique</button><button data-f="Rare">Rare</button>
+    </div>
+    <div class="list" id="loot"></div>
+  </section>
+</main>
+
+<nav>
+  <button class="on" data-v="home" aria-label="Aperçu">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 11V8.5A4 4 0 0 1 7.5 4.5h9a4 4 0 0 1 4 4V11"/><rect x="3.5" y="11" width="17" height="8.5" rx="1.5"/><rect x="10.5" y="9.5" width="3" height="4" rx=".8"/></svg>
+    Aperçu</button>
+  <button data-v="matches" aria-label="Parties">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r=".6" fill="currentColor"/><circle cx="4.5" cy="12" r=".6" fill="currentColor"/><circle cx="4.5" cy="18" r=".6" fill="currentColor"/></svg>
+    Parties</button>
+  <button data-v="loot" aria-label="Butin">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 4.5h12l3 5L12 20 3 9.5z"/><path d="M3 9.5h18M9.5 9.5 12 20l2.5-10.5"/></svg>
+    Butin</button>
+</nav>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const nf = new Intl.NumberFormat("fr-FR");
+const fmt = (n) => nf.format(Math.round(n || 0));
+const MOIS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+const RARITY = { "Commun": "--r-common", "Peu commun": "--r-uncommon", "Rare": "--r-rare", "Épique": "--r-epic",
+                 "Légendaire": "--r-legendary", "Mythique": "--r-mythic" };
+let data = null, lootFilter = "all";
+
+function when(ts) {
+  const d = new Date(ts * 1000), now = new Date();
+  const hm = d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  const days = Math.floor((new Date(now.toDateString()) - new Date(d.toDateString())) / 864e5);
+  if (days === 0) return `Aujourd'hui, ${hm}`;
+  if (days === 1) return `Hier, ${hm}`;
+  return `${d.getDate()} ${MOIS[d.getMonth()]}, ${hm}`;
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const plural = (n, w) => `${fmt(n)} ${w}${n > 1 ? "s" : ""}`;
+
+function renderHome(d) {
+  $("total").textContent = fmt(d.total);
+  const parts = [`${fmt(d.unique)} différent${d.unique > 1 ? "s" : ""}`];
+  if (d.reopens) parts.push(plural(d.reopens, "réouverture"));
+  if (d.broken) parts.push(`${fmt(d.broken)} cassé${d.broken > 1 ? "s" : ""}`);
+  if (d.initial) parts.push(`+${fmt(d.initial)} avant`);
+  $("total-sub").textContent = parts.join(" · ");
+
+  const L = d.level;
+  $("lvl").textContent = `Niveau ${L.level}`;
+  $("lvl-step").textContent = `Palier ${Math.min(L.steps_done + 1, 5)} sur 5`;
+  $("steps").innerHTML = [0, 1, 2, 3, 4].map((i) => {
+    const w = i < L.steps_done ? 100 : i === L.steps_done ? Math.round(L.progress * 100) : 0;
+    return `<div class="step"><i style="width:${w}%"></i></div>`;
+  }).join("");
+  $("lvl-hint").textContent = `Encore ${plural(L.remaining, "coffre")} avant ${L.steps_done === 4 ? "le niveau suivant" : "le palier suivant"}`;
+
+  if (d.last_match) {
+    $("last").textContent = fmt(d.last_match.chests);
+    $("last-s").textContent = when(d.last_match.at) + (d.last_match.placement ? ` · #${d.last_match.placement}` : "");
+  } else { $("last").textContent = "—"; $("last-s").textContent = "aucune partie"; }
+  $("today").textContent = fmt(d.today);
+  $("today-s").textContent = `record : ${fmt(d.best_day)}`;
+  $("avg").textContent = String(d.avg).replace(".", ",");
+  $("avg-s").textContent = `par partie · ${plural(d.matches_count, "partie")}`;
+  $("since").textContent = fmt(d.since_token);
+
+  const max = Math.max(1, ...d.days.map((x) => x.count));
+  const best = d.days.reduce((a, x) => (x.count > a.count ? x : a), d.days[0] || { count: 0 });
+  $("bars").innerHTML = d.days.map((x, i) =>
+    `<div class="${x.count && (i === d.days.length - 1 || x === best) ? "on" : ""}" style="height:${Math.max(3, (x.count / max) * 120)}px" title="${esc(x.date)} : ${x.count}"></div>`
+  ).join("");
+  const first = new Date(d.days[0].date);
+  $("axis-start").textContent = `${first.getDate()} ${MOIS[first.getMonth()]}`;
+  $("chart-sum").textContent = plural(d.days.reduce((a, x) => a + x.count, 0), "coffre");
+
+  const hours = Math.floor(d.play_seconds / 3600), mins = Math.floor((d.play_seconds % 3600) / 60);
+  $("records").innerHTML = [
+    ["Meilleure partie", plural(d.best_match, "coffre")],
+    ["Meilleur jour", plural(d.best_day, "coffre")],
+    ["Parties analysées", fmt(d.matches_count)],
+    ["Temps de jeu", hours ? `${hours} h ${String(mins).padStart(2, "0")}` : `${mins} min`],
+  ].map(([k, v]) => `<div class="row"><div class="k">${k}</div><div class="val">${v}</div></div>`).join("");
+}
+
+function renderMatches(d) {
+  if (!d.matches.length) {
+    $("matches").innerHTML = `<div class="empty">Aucune partie pour l'instant.<br>Elles apparaîtront ici à la fin de chaque partie.</div>`;
+    return;
+  }
+  $("matches").innerHTML = d.matches.map((m) => {
+    const meta = [when(m.at)];
+    if (m.placement) meta.push(`#${m.placement}${m.players ? " / " + m.players : ""}`);
+    if (m.kills != null) meta.push(`${m.kills} élim.`);
+    if (m.broken) meta.push(`${m.broken} cassé${m.broken > 1 ? "s" : ""}`);
+    return `<div class="row"><div class="main"><div class="title">${esc(m.mode)}</div><div class="meta">${esc(meta.join(" · "))}</div></div>
+      <div class="num ${m.chests ? "" : "zero"}">${m.ok ? fmt(m.chests) : "!"}</div></div>`;
+  }).join("");
+}
+
+function renderLoot(d) {
+  const items = d.loot.filter((x) => lootFilter === "all" || x.rarity === lootFilter || x.token);
+  if (!items.length) { $("loot").innerHTML = `<div class="empty">Rien dans cette catégorie pour l'instant.</div>`; return; }
+  $("loot").innerHTML = items.map((x) => {
+    const color = x.token ? "var(--accent)" : `var(${RARITY[x.rarity] || "--text3"})`;
+    return `<div class="row"><span class="dot" style="background:${color}"></span>
+      <div class="main"><div class="title">${esc(x.name)}${x.token ? '<span class="pill">Jeton pirate</span>' : ""}</div>
+      <div class="meta">${esc(x.token ? "Accès à la Boutique Pirate" : (x.rarity || "Objet"))}</div></div><div class="count">${fmt(x.times)}×</div></div>`;
+  }).join("");
+}
+
+function render() {
+  if (!data) return;
+  renderHome(data); renderMatches(data); renderLoot(data);
+  const d = new Date(data.generated_at * 1000);
+  $("status").textContent = `Mis à jour à ${d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })} · v${data.version}`;
+}
+
+async function load() {
+  try {
+    const t = new URLSearchParams(location.search).get("t");
+    const r = await fetch("/api/summary" + (t ? "?t=" + encodeURIComponent(t) : ""), { cache: "no-store", credentials: "same-origin" });
+    if (!r.ok) throw new Error(r.status);
+    data = await r.json();
+    $("banner").classList.remove("on");
+    render();
+  } catch (e) {
+    $("banner").classList.add("on");
+  }
+}
+
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("on", v.id === "v-" + b.dataset.v));
+  window.scrollTo({ top: 0, behavior: "instant" });
+}));
+document.querySelectorAll("#seg button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("#seg button").forEach((x) => x.classList.toggle("on", x === b));
+  lootFilter = b.dataset.f; if (data) renderLoot(data);
+}));
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+const today = new Date();
+$("today-label").textContent = today.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+load();
+setInterval(load, 20000);
+</script>
+</body>
+</html>

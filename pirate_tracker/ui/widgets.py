@@ -203,6 +203,43 @@ class Toggle(QAbstractButton):
         p.end()
 
 
+class QRCode(QWidget):
+    """QR code (module qrcode, matrice dessinée en noir sur blanc pour rester lisible par l'appareil photo)."""
+
+    def __init__(self, size: int = 168, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(size, size)
+        self._matrix: list[list[bool]] = []
+
+    def set_text(self, text: str) -> None:
+        try:
+            import qrcode
+
+            q = qrcode.QRCode(border=2, error_correction=qrcode.constants.ERROR_CORRECT_M)
+            q.add_data(text)
+            q.make(fit=True)
+            self._matrix = q.get_matrix()
+        except Exception:  # noqa: BLE001 - sans QR code, l'adresse reste affichée en texte
+            self._matrix = []
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, False)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor("#ffffff"))
+        p.drawRoundedRect(QRectF(self.rect()), 10, 10)
+        if self._matrix:
+            n = len(self._matrix)
+            cell = (self.width() - 8) / n
+            p.setBrush(QColor("#000000"))
+            for y, row in enumerate(self._matrix):
+                for x, on in enumerate(row):
+                    if on:
+                        p.drawRect(QRectF(4 + x * cell, 4 + y * cell, cell + 0.5, cell + 0.5))
+        p.end()
+
+
 # ---------------------------------------------------------------- progression
 class StepProgress(QWidget):
     """5 segments (paliers) : segments pleins, segment en cours partiellement rempli."""

@@ -36,6 +36,7 @@ class AppContext:
     def __init__(self, app: QApplication, start_watcher: bool = True):
         self.app = app
         self.quitting = False
+        self.companion = None
         self.config = Config()
         self.db = Database()
         self.tracker = Tracker(self.db, self.config)
@@ -66,6 +67,9 @@ class AppContext:
         self.overlay.settings_changed.connect(self._sync_overlay_btn)
         self.window = MainWindow(self)
         self._setup_tray()
+
+        if self.config.get("companion", "enabled", False):
+            self.set_companion(True)
 
         self._backup_timer = QTimer(interval=30 * 60 * 1000, timeout=lambda: auto_backup(self.db))
         self._backup_timer.start()
@@ -230,6 +234,30 @@ class AppContext:
         auto_backup(self.db)
         self.tracker.reset_all()
 
+    # ------------------------------------------------------------------ application mobile
+    def companion_token(self, renew: bool = False) -> str:
+        from .companion.server import new_token
+
+        tok = self.config.get("companion", "token", "")
+        if renew or not tok:
+            tok = new_token()
+            self.config.set("companion", "token", tok)
+        return tok
+
+    def set_companion(self, on: bool) -> bool:
+        """Démarre / arrête la page mobile servie sur le réseau local."""
+        from .companion import CompanionServer
+
+        self.config.set("companion", "enabled", bool(on))
+        if self.companion:
+            self.companion.stop()
+            self.companion = None
+        if not on:
+            return True
+        self.companion = CompanionServer(self.tracker, self.companion_token(),
+                                         int(self.config.get("companion", "port", 8765)))
+        return self.companion.start()
+
     # ------------------------------------------------------------------ autostart (Windows)
     RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -267,6 +295,8 @@ class AppContext:
     def quit(self):
         self.quitting = True
         self.watcher.stop()
+        if self.companion:
+            self.companion.stop()
         try:
             auto_backup(self.db)
         except Exception:

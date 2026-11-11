@@ -15,7 +15,7 @@ from .. import levels, replays
 from ..paths import data_dir
 from . import theme as T
 from .pages import header, page_shell
-from .widgets import Card, SettingRow, StatusDot, Toggle, caps, faint, fmt_int, hline
+from .widgets import Card, QRCode, SettingRow, StatusDot, Toggle, caps, faint, fmt_int, hline
 
 
 class _ImportWorker(QObject):
@@ -198,6 +198,44 @@ class SettingsPage(QWidget):
         test.clicked.connect(lambda: ctx.sound.play("match"))
         self._add(card, SettingRow("Volume", "", _row(vol, test)), last=True)
 
+        # ---------------------------------------------------- application mobile
+        card = self._card("Application mobile")
+        self.mobile = Toggle(cfg.get("companion", "enabled", False))
+        self.mobile.toggled.connect(self._toggle_mobile)
+        self._add(card, SettingRow("Voir mes statistiques sur mon téléphone",
+                                   "Une application épurée, à jour après chaque partie. Le téléphone doit être "
+                                   "sur le même Wi-Fi que ce PC ; rien ne passe par Internet.", self.mobile))
+        self.mobile_box = QWidget()
+        mb = QHBoxLayout(self.mobile_box)
+        mb.setContentsMargins(0, 14, 0, 14)
+        mb.setSpacing(22)
+        self.qr = QRCode(168)
+        mb.addWidget(self.qr, 0, Qt.AlignTop)
+        col = QVBoxLayout()
+        col.setSpacing(8)
+        steps = faint("1. Scannez ce QR code avec l'appareil photo du téléphone.\n"
+                      "2. Sur iPhone : bouton Partager → « Sur l'écran d'accueil ». Sur Android : menu ⋮ → "
+                      "« Ajouter à l'écran d'accueil ».\n"
+                      "3. Si Windows demande l'autorisation du pare-feu, acceptez pour les réseaux privés.")
+        steps.setFont(T.font(12))
+        col.addWidget(steps)
+        self.mobile_url = faint("", wrap=True)
+        self.mobile_url.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.mobile_url.setFont(T.font(12))
+        col.addWidget(self.mobile_url)
+        copy = QPushButton("Copier l'adresse")
+        copy.setObjectName("ghost")
+        copy.clicked.connect(self._copy_mobile_url)
+        renew = QPushButton("Nouvelle clé d'accès")
+        renew.setObjectName("ghost")
+        renew.setToolTip("Change l'adresse secrète : les téléphones déjà connectés devront rescanner le QR code.")
+        renew.clicked.connect(self._renew_mobile_token)
+        col.addWidget(_row(copy, renew), 0, Qt.AlignLeft)
+        col.addStretch(1)
+        mb.addLayout(col, 1)
+        card.lay.addWidget(self.mobile_box)
+        self._refresh_mobile()
+
         # ---------------------------------------------------- données
         card = self._card("Données")
         btns = []
@@ -332,6 +370,36 @@ class SettingsPage(QWidget):
         from ..analysis_log import logs_dir
 
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(logs_dir())))
+
+    def _refresh_mobile(self):
+        comp = self.ctx.companion
+        on = bool(comp and comp.running)
+        self.mobile_box.setVisible(on or bool(comp and comp.error))
+        if comp and comp.error:
+            self.mobile_url.setText(comp.error)
+            self.qr.set_text("")
+        elif on:
+            url = comp.url()
+            self.qr.set_text(url)
+            self.mobile_url.setText(url)
+
+    def _toggle_mobile(self, on: bool):
+        ok = self.ctx.set_companion(on)
+        if on and not ok:
+            self.ctx.toast("Application mobile indisponible", self.ctx.companion.error if self.ctx.companion else "")
+        self._refresh_mobile()
+
+    def _copy_mobile_url(self):
+        from PySide6.QtWidgets import QApplication
+
+        if self.ctx.companion and self.ctx.companion.running:
+            QApplication.clipboard().setText(self.ctx.companion.url())
+            self.ctx.toast("Adresse copiée", "")
+
+    def _renew_mobile_token(self):
+        self.ctx.companion_token(renew=True)
+        self.ctx.set_companion(True)
+        self._refresh_mobile()
 
     def _set_ov(self, key, value):
         self.ctx.config.set("overlay", key, value)

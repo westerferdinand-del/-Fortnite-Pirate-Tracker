@@ -23,6 +23,12 @@ DEFAULTS: dict[str, Any] = {
         # Noms internes exacts désignés par l'utilisateur dans la page Récompenses
         "items": [],
     },
+    # Application mobile : page servie sur le réseau local (désactivée par défaut)
+    "companion": {
+        "enabled": False,
+        "port": 8765,
+        "token": "",
+    },
     "overlay": {
         "visible": True,
         "size": "medium",  # small | medium | large

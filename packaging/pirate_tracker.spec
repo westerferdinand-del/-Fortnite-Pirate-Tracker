@@ -12,9 +12,10 @@ if not os.path.exists(READER):
 a = Analysis(
     [os.path.join(ROOT, "pirate_tracker", "__main__.py")],
     pathex=[ROOT],
-    datas=[(os.path.join(ROOT, "pirate_tracker", "assets"), os.path.join("pirate_tracker", "assets"))],
+    datas=[(os.path.join(ROOT, "pirate_tracker", "assets"), os.path.join("pirate_tracker", "assets")),
+           (os.path.join(ROOT, "pirate_tracker", "companion", "web"), os.path.join("pirate_tracker", "companion", "web"))],
     binaries=[(READER, os.path.join("pirate_tracker", "bin"))],
-    hiddenimports=["PySide6.QtMultimedia"],
+    hiddenimports=["PySide6.QtMultimedia", "qrcode", "qrcode.constants"],
     excludes=["tkinter", "matplotlib", "numpy", "cv2", "PySide6.QtWebEngineCore", "PySide6.QtQml", "PySide6.QtQuick",
               "PySide6.Qt3DCore", "PySide6.QtCharts", "PySide6.QtPdf"],
     noarchive=False,

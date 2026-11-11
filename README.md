@@ -138,6 +138,22 @@ Interface v2 : sobre, noir profond, une seule couleur d'accent, police Inter.
 | ![Parties](docs/matches.png) | ![Butin](docs/loot.png) |
 | ![Réglages](docs/settings.png) | |
 
+### Application mobile
+
+Vos statistiques sur votre téléphone, dans une application épurée (style iOS, mode clair ou sombre
+automatique) : total, niveau, dernière partie, coffres par jour, records, historique des parties
+et butin, à jour après chaque partie.
+
+Réglages → **Application mobile** → activez, puis scannez le QR code avec l'appareil photo du
+téléphone. Sur iPhone : bouton Partager → « Sur l'écran d'accueil ». Le téléphone doit être sur le
+même Wi-Fi que le PC. La page est servie par Pirate Tracker lui-même sur le réseau local : rien
+ne passe par Internet. L'accès est protégé par une clé secrète (dans le QR code), et la page est
+en lecture seule.
+
+| Aperçu | Parties (mode sombre) |
+|---|---|
+| ![Aperçu mobile](docs/mobile_home.png) | ![Parties mobile](docs/mobile_matches.png) |
+
 Données : `%APPDATA%\PirateTracker\` (base SQLite, réglages, sauvegardes automatiques).
 
 ---
